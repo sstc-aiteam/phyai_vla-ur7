@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Recorded datasets / media (large binary outputs)
+ur7e_pick_and_place/data/
+ur7e_pick_and_place/videos/
+*.mp4
+*.avi
+
+# Checkpoints / model weights
+*.pt
+*.pth
+*.ckpt
+checkpoints/

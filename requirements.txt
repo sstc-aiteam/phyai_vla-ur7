@@ -1,0 +1,5 @@
+ur-rtde
+opencv-python
+pyarrow
+pandas
+pyrealsense2
