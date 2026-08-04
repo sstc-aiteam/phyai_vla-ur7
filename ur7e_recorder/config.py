@@ -28,12 +28,12 @@ class RecorderConfig:
     robot_ip: str = "192.168.50.76"
     dataset_name: str = "ur7e_pick_and_place"
     num_episodes: int = 5  #50
-    fps: int = 5 #30
+    fps: int = 30 #10
     task: str = "Pick up the object and place it in the bin"
-    cam_overhead: int = 0
+    cam_overhead: int = -1
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
-    cam_wrist: int = -1
-    cam_wrist_backend: str = CAMERA_BACKENDS[0]
+    cam_wrist: int = 0
+    cam_wrist_backend: str = CAMERA_BACKENDS[1]
 
     @property
     def camera_configs(self) -> dict:
@@ -48,3 +48,13 @@ class RecorderConfig:
                 index=self.cam_wrist, fps=self.fps, backend=self.cam_wrist_backend
             )
         return configs
+
+
+@dataclass
+class ReplayConfig:
+    robot_ip: str = "192.168.50.76"
+    dataset_name: str = "ur7e_pick_and_place"
+    episode: int = 0
+    fps: int | None = None  # None => read from the dataset's meta/info.json
+    start_speed: float = 0.3  # rad/s for the initial moveJ to the episode's first pose
+    start_acceleration: float = 0.3  # rad/s^2 for the initial moveJ

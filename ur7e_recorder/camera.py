@@ -60,7 +60,9 @@ class RealSenseCamera(Camera):
     def __init__(self, name: str, cfg: CameraConfig):
         import pyrealsense2 as rs
 
+        self.name = name
         self.pipeline = None
+        self._warned_timeout = False
 
         devices = rs.context().devices
         if len(devices) == 0:
@@ -84,7 +86,17 @@ class RealSenseCamera(Camera):
     def read(self) -> np.ndarray | None:
         if self.pipeline is None:
             return None
-        frames = self.pipeline.wait_for_frames(timeout_ms=3000)
+        try:
+            frames = self.pipeline.wait_for_frames(timeout_ms=3000)
+        except RuntimeError:
+            # A dropped/late frame (e.g. a USB glitch) shouldn't kill the
+            # whole recording session -- fall back like a bad USB read.
+            if not self._warned_timeout:
+                print(f"[WARN] RealSense camera '{self.name}': frame timed out; "
+                      f"substituting blank frames until it recovers.")
+                self._warned_timeout = True
+            return None
+        self._warned_timeout = False
         color_frame = frames.get_color_frame()
         if not color_frame:
             return None
