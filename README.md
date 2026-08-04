@@ -89,6 +89,7 @@ python lerobot.replay.py \
     --robot-ip 192.168.50.75 \
     --dataset-name ur7e_pick_and_place \
     --episode 3
+    --fps 1
 ```
 
 | Flag | Default | Description |
