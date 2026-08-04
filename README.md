@@ -137,8 +137,8 @@ python lerobot.dump_states.py --dataset-name ur7e_pick_and_place --format json  
 lerobot.train.py        Record entry point script
 lerobot.replay.py       Replay entry point script
 lerobot.dump_states.py  Joint state dump entry point script
-requirements.txt       Python dependencies
-ur7e_recorder/         Recorder implementation
+requirements.txt        Python dependencies
+ur7e_recorder/          Recorder implementation
     config.py          RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
     keyboard.py        Non-blocking key input
     gripper/           Gripper interface + RobotiqGripper
