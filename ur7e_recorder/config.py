@@ -32,7 +32,7 @@ class RecorderConfig:
     task: str = "Pick up the object and place it in the bin"
     cam_overhead: int = -1
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
-    cam_wrist: int = 0
+    cam_wrist: int = -1
     cam_wrist_backend: str = CAMERA_BACKENDS[1]
 
     @property

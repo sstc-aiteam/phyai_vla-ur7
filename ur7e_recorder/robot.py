@@ -9,8 +9,13 @@ class UR7eRobot:
 
     def __init__(self, ip: str):
         self.ip = ip
-        self.rtde_r = rtde_receive.RTDEReceiveInterface(ip)
+        # rtde_c first: its constructor uploads/starts the External Control
+        # URScript on the controller, which resets the robot's RTDE server
+        # session. Connecting rtde_r before that reset can leave it stuck
+        # silently replaying its last-received packet for the rest of the
+        # process (no exception, just frozen readings).
         self.rtde_c = rtde_control.RTDEControlInterface(ip)
+        self.rtde_r = rtde_receive.RTDEReceiveInterface(ip)
 
     def get_joint_positions(self) -> list:
         """Current joint positions in radians (6 values)."""

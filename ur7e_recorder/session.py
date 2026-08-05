@@ -56,6 +56,13 @@ class RecordingSession:
         self.episodes_recorded = 0
         self._quit = False
 
+        # Tripwire for a stuck RTDE receive feed (e.g. getActualQ() frozen
+        # on a stale packet): warn once if joint readings stop changing for
+        # a full second of recording instead of silently saving dead data.
+        self._last_joint_positions = None
+        self._stuck_frames = 0
+        self._stuck_warned = False
+
     def run(self):
         self.keys.start()
         self._print_banner()
@@ -105,6 +112,11 @@ class RecordingSession:
         self.gripper.toggle()
         state_str = "OPEN" if self.gripper.is_open else "CLOSED"
         print(f"  Gripper: {state_str}")
+        # Sending the gripper's URScript command replaces the running
+        # freedrive control script on the controller, which silently ends
+        # freedrive (the arm goes rigid). Re-enter freedrive so the user
+        # can keep guiding it by hand.
+        self.robot.enable_freedrive()
 
     def _handle_discard(self):
         if self.recording:
@@ -127,6 +139,7 @@ class RecordingSession:
 
     def _record_step(self):
         joint_positions = self.robot.get_joint_positions()
+        self._check_stuck_readings(joint_positions)
         state = joint_positions + [self.gripper.position]
         action = state.copy()
         camera_frames = self.cam_mgr.read_all() if self.cam_mgr else {}
@@ -141,6 +154,28 @@ class RecordingSession:
         if self.episode.num_steps % self.fps == 0:
             elapsed = self.episode.num_steps / self.fps
             print(f"    ... {self.episode.num_steps} steps ({elapsed:.1f}s)")
+
+    def _check_stuck_readings(self, joint_positions: list):
+        """Warn once if get_joint_positions() stops changing for a full
+        second, which usually means the RTDE receive feed is stuck on a
+        stale packet rather than the arm actually holding still."""
+        if self._last_joint_positions is not None and all(
+            abs(a - b) < 1e-9
+            for a, b in zip(joint_positions, self._last_joint_positions)
+        ):
+            self._stuck_frames += 1
+        else:
+            self._stuck_frames = 0
+            self._stuck_warned = False
+        self._last_joint_positions = joint_positions
+
+        if self._stuck_frames >= self.fps and not self._stuck_warned:
+            print(
+                "  [WARN] Joint readings haven't changed in ~1s. If the arm "
+                "is actually moving, the RTDE receive feed is likely stuck "
+                "— restart the recorder."
+            )
+            self._stuck_warned = True
 
     def _print_banner(self):
         camera_names = self.cam_mgr.names if self.cam_mgr else []
