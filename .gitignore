@@ -41,3 +41,4 @@ ur7e_pick_and_place/videos/
 *.pth
 *.ckpt
 checkpoints/
+.claude/settings.json
