@@ -139,10 +139,10 @@ lerobot.replay.py       Replay entry point script
 lerobot.dump_states.py  Joint state dump entry point script
 requirements.txt        Python dependencies
 ur7e_recorder/          Recorder implementation
-    config.py          RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
-    keyboard.py        Non-blocking key input
-    gripper/           Gripper interface + RobotiqGripper
-    robot.py           UR7e RTDE connection lifecycle
+    config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
+    keyboard.py         Non-blocking key input
+    gripper/            Gripper interface + RobotiqGripper
+    robot.py            UR7e RTDE connection lifecycle
     camera.py           Camera interface (USBCamera, RealSenseCamera) + CameraManager
     episode.py          EpisodeRecorder (per-episode buffer)
     dataset.py          LeRobotDatasetWriter (LeRobot v2 format on disk)
