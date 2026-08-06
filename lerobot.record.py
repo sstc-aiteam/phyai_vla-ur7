@@ -9,7 +9,7 @@ Requirements:
     pip install -r requirements.txt
 
 Usage:
-    python lerobot.train.py \
+    python lerobot.record.py \
         --robot-ip 192.168.50.75 \
         --dataset-name my_pick_and_place \
         --num-episodes 50 \

@@ -32,7 +32,7 @@ Run the recorder, pointing it at your robot's IP and choosing which cameras
 to use:
 
 ```bash
-python lerobot.train.py \
+python lerobot.record.py \
     --robot-ip 192.168.50.75 \
     --dataset-name my_pick_and_place \
     --num-episodes 50 \
@@ -134,7 +134,7 @@ python lerobot.dump_states.py --dataset-name ur7e_pick_and_place --format json  
 ## Project layout
 
 ```
-lerobot.train.py        Record entry point script
+lerobot.record.py       Record entry point script
 lerobot.replay.py       Replay entry point script
 lerobot.dump_states.py  Joint state dump entry point script
 requirements.txt        Python dependencies

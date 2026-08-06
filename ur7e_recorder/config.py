@@ -26,13 +26,13 @@ class CameraConfig:
 @dataclass
 class RecorderConfig:
     robot_ip: str = "192.168.50.76"
-    dataset_name: str = "ur7e_pick_and_place"
-    num_episodes: int = 5  #50
-    fps: int = 30 #10
-    task: str = "Pick up the object and place it in the bin"
-    cam_overhead: int = -1
+    dataset_name: str = "ur7e_pick_and_place_dataset"
+    num_episodes: int = 5                           #50
+    fps: int = 30                                   #1
+    task: str = "task description in here"
+    cam_overhead: int = -1                          # -1 => disabled
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
-    cam_wrist: int = -1
+    cam_wrist: int = -1                             # -1 => disabled
     cam_wrist_backend: str = CAMERA_BACKENDS[1]
 
     @property
