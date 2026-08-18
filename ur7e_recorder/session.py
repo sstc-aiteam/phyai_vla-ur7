@@ -67,10 +67,9 @@ class RecordingSession:
         self.keys.start()
         self._print_banner()
 
-        self.robot.enable_freedrive()
-        print("[FREEDRIVE] Robot is now in free-drive mode. Guide it by hand.\n")
-
         try:
+            self.robot.enable_freedrive()
+            print("[FREEDRIVE] Robot is now in free-drive mode. Guide it by hand.\n")
             self._loop()
         except KeyboardInterrupt:
             print("\n[INTERRUPTED]")
