@@ -1,37 +1,15 @@
 """Robotiq gripper control.
 
-`Gripper` is the interface the rest of the recorder depends on, so new
-gripper hardware can be supported by adding a subclass here without
-touching camera, dataset, or session code.
-
 `RobotiqGripper` drives a real Robotiq 2F gripper over UR RTDE using the
 vendor URScript preamble (see ur_rtde docs:
 https://sdurobotics.gitlab.io/ur_rtde/_static/robotiq_gripper_control.py),
-adapted to satisfy the `Gripper` interface.
+adapted to satisfy the `Gripper` interface (see base.py).
 """
 
 import time
-from abc import ABC, abstractmethod
 
+from .base import Gripper
 from .robotiq_preamble import ROBOTIQ_PREAMBLE
-
-
-class Gripper(ABC):
-    """Binary open/close gripper interface."""
-
-    is_open: bool
-    position: float  # 0.0 = open, 1.0 = closed
-
-    @abstractmethod
-    def open(self):
-        ...
-
-    @abstractmethod
-    def close(self):
-        ...
-
-    def toggle(self):
-        self.close() if self.is_open else self.open()
 
 
 class RobotiqGripper(Gripper):

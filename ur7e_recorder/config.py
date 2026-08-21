@@ -13,6 +13,14 @@ from dataclasses import dataclass
 #: Camera backends a CameraConfig can select.
 CAMERA_BACKENDS = ("usb", "realsense")
 
+#: Freedrive implementations a robot's controller generation supports:
+#:   "e-series" -- freedriveMode()/endFreedriveMode() (UR7e and other e-Series arms)
+#:   "cb3"      -- teachMode()/endTeachMode() (CB3 controllers, e.g. this UR5 on PolyScope 3.13)
+CONTROLLER_GENERATIONS = ("e-series", "cb3")
+
+#: Gripper hardware a run can record with.
+GRIPPER_KINDS = ("robotiq", "none")
+
 
 @dataclass
 class CameraConfig:
@@ -34,6 +42,9 @@ class RecorderConfig:
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
     cam_wrist: int = -1                             # -1 => disabled
     cam_wrist_backend: str = CAMERA_BACKENDS[1]
+    controller: str = CONTROLLER_GENERATIONS[0]     # "e-series" or "cb3"
+    gripper: str = GRIPPER_KINDS[0]                 # "robotiq" or "none"
+    robot_type: str = "ur7e"                        # stored in the dataset's meta/info.json
 
     @property
     def camera_configs(self) -> dict:
@@ -58,3 +69,4 @@ class ReplayConfig:
     fps: int | None = None  # None => read from the dataset's meta/info.json
     start_speed: float = 0.3  # rad/s for the initial moveJ to the episode's first pose
     start_acceleration: float = 0.3  # rad/s^2 for the initial moveJ
+    gripper: str = GRIPPER_KINDS[0]  # "robotiq" or "none" -- must match how the dataset was recorded

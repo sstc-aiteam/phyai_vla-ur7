@@ -1,17 +1,22 @@
 # phyai_vla-ur7
 
-Free-drive pick-and-place demonstration recorder for the UR7e arm, producing
+Free-drive pick-and-place demonstration recorder for UR arms, producing
 datasets in [LeRobot](https://github.com/huggingface/lerobot) v2 format
 (Parquet state/action + MP4 video) for training VLA policies.
 
 You physically guide the robot in freedrive mode while the recorder logs
 joint state/action and camera frames for each episode.
 
+Built for the UR7e (e-Series), but also drives older CB3 controllers --
+e.g. a UR5 on PolyScope 3.13 -- via `--controller cb3` (see below); every
+recording, regardless of arm, is written in the same LeRobot v2 layout.
+
 ## Requirements
 
 - Python 3.10+
-- A UR7e robot reachable over the network, with the RTDE interface enabled
-- (Optional) a Robotiq gripper attached via the robot's tool I/O
+- A UR robot reachable over the network, with the RTDE interface enabled
+- (Optional) a Robotiq gripper attached via the robot's tool I/O -- pass
+  `--gripper none` for a bare arm with nothing attached
 - (Optional) one or two cameras: USB (OpenCV) and/or Intel RealSense
 
 Install dependencies:
@@ -52,9 +57,25 @@ python lerobot.record.py \
 | `--cam-overhead-backend` | `usb` | Backend for the overhead camera (`usb` or `realsense`) |
 | `--cam-wrist` | `-1` | Camera index for wrist view (`-1` to disable) |
 | `--cam-wrist-backend` | `usb` | Backend for the wrist camera (`usb` or `realsense`) |
+| `--controller` | `e-series` | `e-series` (`freedriveMode`, UR7e/UR5e/...) or `cb3` (`teachMode`, e.g. a UR5 on PolyScope 3.13) |
+| `--gripper` | `robotiq` | `robotiq`, or `none` for a bare arm with nothing attached |
+| `--robot-type` | `ur7e` | Robot type recorded in the dataset's `meta/info.json` |
 
 Camera indices of `-1` disable that camera. With no cameras enabled, the
 recorder still runs and produces a state-only dataset.
+
+To record from a UR5 on a CB3 controller (PolyScope 3.13) with no gripper
+attached, everything else about the workflow -- controls, dataset layout,
+replay, dump -- stays the same:
+
+```bash
+python lerobot.record.py \
+    --robot-ip 192.168.50.50 \
+    --dataset-name my_ur5_dataset \
+    --controller cb3 \
+    --gripper none \
+    --robot-type ur5
+```
 
 #### Controls while recording
 
@@ -100,6 +121,7 @@ python lerobot.replay.py \
 | `--fps` | dataset's recorded fps | Playback rate in Hz |
 | `--start-speed` | `0.3` | rad/s for the initial move to the episode's start pose |
 | `--start-acceleration` | `0.3` | rad/s² for the initial move to the episode's start pose |
+| `--gripper` | `robotiq` | `robotiq`, or `none` -- must match how the dataset was recorded |
 
 The robot first moves to the episode's start pose with a slow, blocking
 move (`--start-speed` / `--start-acceleration`) before streaming the rest
@@ -141,8 +163,8 @@ requirements.txt        Python dependencies
 ur7e_recorder/          Recorder implementation
     config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
     keyboard.py         Non-blocking key input
-    gripper/            Gripper interface + RobotiqGripper
-    robot.py            UR7e RTDE connection lifecycle
+    gripper/            Gripper interface, RobotiqGripper, NoGripper (--gripper none)
+    robot.py            UR RTDE connection lifecycle (e-Series freedriveMode or CB3 teachMode)
     camera.py           Camera interface (USBCamera, RealSenseCamera) + CameraManager
     episode.py          EpisodeRecorder (per-episode buffer)
     dataset.py          LeRobotDatasetWriter (LeRobot v2 format on disk)

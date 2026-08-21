@@ -22,6 +22,7 @@ class LeRobotDatasetWriter:
         self.dataset_dir = Path(config.dataset_name)
         self.fps = config.fps
         self.task = config.task
+        self.robot_type = config.robot_type
         self.camera_names = camera_names
         self.episode_count = 0
 
@@ -113,7 +114,7 @@ class LeRobotDatasetWriter:
         state_dim = len(STATE_NAMES)
         info = {
             "codebase_version": "v2.0",
-            "robot_type": "ur7e",
+            "robot_type": self.robot_type,
             "fps": self.fps,
             "total_episodes": self.episode_count,
             "features": {

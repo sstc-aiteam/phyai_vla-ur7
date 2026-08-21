@@ -9,10 +9,16 @@ from pathlib import Path
 import pandas as pd
 
 from .camera import CameraManager
-from .config import CAMERA_BACKENDS, RecorderConfig, ReplayConfig
+from .config import (
+    CAMERA_BACKENDS,
+    CONTROLLER_GENERATIONS,
+    GRIPPER_KINDS,
+    RecorderConfig,
+    ReplayConfig,
+)
 from .dataset import LeRobotDatasetWriter
 from .dump import load_dataset_joint_states
-from .gripper import RobotiqGripper
+from .gripper import NoGripper, RobotiqGripper
 from .replay import EpisodeReplayer
 from .robot import UR7eRobot
 from .session import RecordingSession
@@ -41,6 +47,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cam-wrist-backend", type=str, choices=CAMERA_BACKENDS,
                         default=defaults.cam_wrist_backend,
                         help="Backend for the wrist camera")
+    parser.add_argument("--controller", type=str, choices=CONTROLLER_GENERATIONS,
+                        default=defaults.controller,
+                        help="Controller generation: 'e-series' (freedriveMode, UR7e/UR5e/...) "
+                             "or 'cb3' (teachMode, e.g. a UR5 on PolyScope 3.13)")
+    parser.add_argument("--gripper", type=str, choices=GRIPPER_KINDS,
+                        default=defaults.gripper,
+                        help="Gripper attached to the arm ('none' for a bare arm)")
+    parser.add_argument("--robot-type", type=str, default=defaults.robot_type,
+                        help="Robot type recorded in the dataset's meta/info.json")
     return parser
 
 
@@ -56,6 +71,9 @@ def parse_config(argv: list | None = None) -> RecorderConfig:
         cam_overhead_backend=args.cam_overhead_backend,
         cam_wrist=args.cam_wrist,
         cam_wrist_backend=args.cam_wrist_backend,
+        controller=args.controller,
+        gripper=args.gripper,
+        robot_type=args.robot_type,
     )
 
 
@@ -78,12 +96,15 @@ def main():
         print("[WARN] No cameras configured. Recording state-only dataset.")
     cam_mgr = CameraManager(camera_configs) if camera_configs else None
 
-    print(f"Connecting to UR7e at {config.robot_ip}...")
-    robot = UR7eRobot(config.robot_ip)
+    print(f"Connecting to UR arm at {config.robot_ip} (controller={config.controller})...")
+    robot = UR7eRobot(config.robot_ip, controller=config.controller)
     print("[OK] Connected to UR robtic arm.")
 
-    gripper = RobotiqGripper(robot.rtde_c)
-    gripper.open()
+    if config.gripper == "none":
+        gripper = NoGripper()
+    else:
+        gripper = RobotiqGripper(robot.rtde_c)
+        gripper.open()
 
     writer = LeRobotDatasetWriter(config, camera_names=list(camera_configs.keys()))
 
@@ -114,6 +135,10 @@ def build_replay_arg_parser() -> argparse.ArgumentParser:
                         help="rad/s for the initial move to the episode's start pose")
     parser.add_argument("--start-acceleration", type=float, default=defaults.start_acceleration,
                         help="rad/s^2 for the initial move to the episode's start pose")
+    parser.add_argument("--gripper", type=str, choices=GRIPPER_KINDS,
+                        default=defaults.gripper,
+                        help="Gripper attached to the arm ('none' for a bare arm) -- "
+                             "must match how the dataset was recorded")
     return parser
 
 
@@ -126,6 +151,7 @@ def parse_replay_config(argv: list | None = None) -> ReplayConfig:
         fps=args.fps,
         start_speed=args.start_speed,
         start_acceleration=args.start_acceleration,
+        gripper=args.gripper,
     )
 
 
@@ -138,7 +164,7 @@ def main_replay():
     robot = UR7eRobot(config.robot_ip)
     print("[OK] Connected to UR robtic arm.")
 
-    gripper = RobotiqGripper(robot.rtde_c)
+    gripper = NoGripper() if config.gripper == "none" else RobotiqGripper(robot.rtde_c)
 
     replayer = EpisodeReplayer(robot, gripper, fps=fps)
     try:

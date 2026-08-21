@@ -13,10 +13,17 @@ ROBOT_MODE_RUNNING = 7
 
 
 class UR7eRobot:
-    """Owns the RTDE control/receive interfaces and their lifecycle."""
+    """Owns the RTDE control/receive interfaces and their lifecycle.
 
-    def __init__(self, ip: str):
+    Also drives arms on other controller generations, despite the name --
+    `controller="cb3"` targets CB3 controllers (e.g. a UR5 on PolyScope
+    3.13), which expose freedrive as teachMode()/endTeachMode() instead of
+    the e-Series freedriveMode()/endFreedriveMode().
+    """
+
+    def __init__(self, ip: str, controller: str = "e-series"):
         self.ip = ip
+        self.controller = controller
         # rtde_c first: its constructor uploads/starts the External Control
         # URScript on the controller, which resets the robot's RTDE server
         # session. Connecting rtde_r before that reset can leave it stuck
@@ -51,10 +58,12 @@ class UR7eRobot:
             logger.error(msg)
             raise RuntimeError(msg)
 
-        ok = self.rtde_c.freedriveMode()
+        enter = self.rtde_c.teachMode if self.controller == "cb3" else self.rtde_c.freedriveMode
+        ok = enter()
         if not ok:
+            fn_name = "teachMode()" if self.controller == "cb3" else "freedriveMode()"
             msg = (
-                "freedriveMode() was rejected by the robot. Common causes: the "
+                f"{fn_name} was rejected by the robot. Common causes: the "
                 "'External Control' URCap program isn't loaded/playing on the "
                 "pendant, the robot isn't in Remote Control mode, or there's an "
                 "active protective/safety stop."
@@ -63,7 +72,10 @@ class UR7eRobot:
             raise RuntimeError(msg)
 
     def disable_freedrive(self):
-        self.rtde_c.endFreedriveMode()
+        if self.controller == "cb3":
+            self.rtde_c.endTeachMode()
+        else:
+            self.rtde_c.endFreedriveMode()
 
     def disconnect(self):
         self.rtde_c.stopScript()
