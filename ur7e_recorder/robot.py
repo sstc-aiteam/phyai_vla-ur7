@@ -1,7 +1,15 @@
 """UR7e connection and motion-mode management."""
 
+import logging
+
 import rtde_control
 import rtde_receive
+
+logger = logging.getLogger(__name__)
+
+# rtde_receive.RTDEReceiveInterface.getRobotMode() return value meaning
+# "normal operation, capable of running a program" -- see its docstring.
+ROBOT_MODE_RUNNING = 7
 
 
 class UR7eRobot:
@@ -21,15 +29,38 @@ class UR7eRobot:
         """Current joint positions in radians (6 values)."""
         return list(self.rtde_r.getActualQ())
 
+    def _freedrive_preflight_issue(self) -> str | None:
+        """Return a specific reason freedrive would be rejected, or None if clear."""
+        if self.rtde_r.isEmergencyStopped():
+            return "the robot is in an EMERGENCY STOP"
+        if self.rtde_r.isProtectiveStopped():
+            return "the robot is in a PROTECTIVE STOP"
+        robot_mode = self.rtde_r.getRobotMode()
+        if robot_mode != ROBOT_MODE_RUNNING:
+            return (
+                f"the robot isn't in RUNNING mode (robot mode={robot_mode}) -- "
+                "the 'External Control' URCap program is likely not loaded/"
+                "playing on the pendant, or the robot isn't in Remote Control mode"
+            )
+        return None
+
     def enable_freedrive(self):
+        issue = self._freedrive_preflight_issue()
+        if issue:
+            msg = f"Cannot enable freedrive: {issue}."
+            logger.error(msg)
+            raise RuntimeError(msg)
+
         ok = self.rtde_c.freedriveMode()
         if not ok:
-            raise RuntimeError(
+            msg = (
                 "freedriveMode() was rejected by the robot. Common causes: the "
                 "'External Control' URCap program isn't loaded/playing on the "
                 "pendant, the robot isn't in Remote Control mode, or there's an "
                 "active protective/safety stop."
             )
+            logger.error(msg)
+            raise RuntimeError(msg)
 
     def disable_freedrive(self):
         self.rtde_c.endFreedriveMode()

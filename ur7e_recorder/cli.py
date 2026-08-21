@@ -80,7 +80,7 @@ def main():
 
     print(f"Connecting to UR7e at {config.robot_ip}...")
     robot = UR7eRobot(config.robot_ip)
-    print("[OK] Connected to UR7e.")
+    print("[OK] Connected to UR robtic arm.")
 
     gripper = RobotiqGripper(robot.rtde_c)
     gripper.open()
@@ -136,7 +136,7 @@ def main_replay():
 
     print(f"Connecting to UR7e at {config.robot_ip}...")
     robot = UR7eRobot(config.robot_ip)
-    print("[OK] Connected to UR7e.")
+    print("[OK] Connected to UR robtic arm.")
 
     gripper = RobotiqGripper(robot.rtde_c)
 
