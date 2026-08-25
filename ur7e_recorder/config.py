@@ -18,6 +18,11 @@ CAMERA_BACKENDS = ("usb", "realsense")
 #:   "cb3"      -- teachMode()/endTeachMode() (CB3 controllers, e.g. this UR5 on PolyScope 3.13)
 CONTROLLER_GENERATIONS = ("e-series", "cb3")
 
+#: Sentinel telling UR7eRobot to detect the generation itself via the
+#: Dashboard Server instead of taking it from the caller/CLI.
+#: See robot.detect_controller_generation.
+CONTROLLER_AUTO = "auto"
+
 #: Gripper hardware a run can record with.
 GRIPPER_KINDS = ("robotiq", "none")
 
@@ -36,13 +41,13 @@ class RecorderConfig:
     robot_ip: str = "192.168.50.76"
     dataset_name: str = "ur7e_pick_and_place_dataset"
     num_episodes: int = 5                           #50
-    fps: int = 30                                   #1
+    fps: int = 10                                   #1
     task: str = "task description in here"
     cam_overhead: int = -1                          # -1 => disabled
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
     cam_wrist: int = -1                             # -1 => disabled
     cam_wrist_backend: str = CAMERA_BACKENDS[1]
-    controller: str = CONTROLLER_GENERATIONS[0]     # "e-series" or "cb3"
+    controller: str = CONTROLLER_AUTO               # "auto", "e-series", or "cb3"
     gripper: str = GRIPPER_KINDS[0]                 # "robotiq" or "none"
     robot_type: str = "ur7e"                        # stored in the dataset's meta/info.json
 
@@ -52,11 +57,11 @@ class RecorderConfig:
         configs = {}
         if self.cam_overhead >= 0:
             configs["cam_overhead"] = CameraConfig(
-                index=self.cam_overhead, fps=self.fps, backend=self.cam_overhead_backend
+                index=self.cam_overhead, backend=self.cam_overhead_backend
             )
         if self.cam_wrist >= 0:
             configs["cam_wrist"] = CameraConfig(
-                index=self.cam_wrist, fps=self.fps, backend=self.cam_wrist_backend
+                index=self.cam_wrist, backend=self.cam_wrist_backend
             )
         return configs
 

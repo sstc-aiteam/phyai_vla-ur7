@@ -11,6 +11,7 @@ import pandas as pd
 from .camera import CameraManager
 from .config import (
     CAMERA_BACKENDS,
+    CONTROLLER_AUTO,
     CONTROLLER_GENERATIONS,
     GRIPPER_KINDS,
     RecorderConfig,
@@ -47,10 +48,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cam-wrist-backend", type=str, choices=CAMERA_BACKENDS,
                         default=defaults.cam_wrist_backend,
                         help="Backend for the wrist camera")
-    parser.add_argument("--controller", type=str, choices=CONTROLLER_GENERATIONS,
+    parser.add_argument("--controller", type=str,
+                        choices=(CONTROLLER_AUTO, *CONTROLLER_GENERATIONS),
                         default=defaults.controller,
-                        help="Controller generation: 'e-series' (freedriveMode, UR7e/UR5e/...) "
-                             "or 'cb3' (teachMode, e.g. a UR5 on PolyScope 3.13)")
+                        help="Controller generation: 'auto' (default; detected from the "
+                             "robot's Dashboard Server), 'e-series' (freedriveMode, "
+                             "UR7e/UR5e/...), or 'cb3' (teachMode, e.g. a UR5 on "
+                             "PolyScope 3.13)")
     parser.add_argument("--gripper", type=str, choices=GRIPPER_KINDS,
                         default=defaults.gripper,
                         help="Gripper attached to the arm ('none' for a bare arm)")
@@ -96,9 +100,9 @@ def main():
         print("[WARN] No cameras configured. Recording state-only dataset.")
     cam_mgr = CameraManager(camera_configs) if camera_configs else None
 
-    print(f"Connecting to UR arm at {config.robot_ip} (controller={config.controller})...")
+    print(f"Connecting to UR arm at {config.robot_ip}...")
     robot = UR7eRobot(config.robot_ip, controller=config.controller)
-    print("[OK] Connected to UR robtic arm.")
+    print(f"[OK] Connected to UR robtic arm (controller={robot.controller}).")
 
     if config.gripper == "none":
         gripper = NoGripper()
@@ -161,7 +165,9 @@ def main_replay():
     fps = config.fps or EpisodeReplayer.dataset_fps(dataset_dir)
 
     print(f"Connecting to UR7e at {config.robot_ip}...")
-    robot = UR7eRobot(config.robot_ip)
+    # Replay only moves the arm (moveJ/servoJ/...), never freedrive, so the
+    # controller generation doesn't matter here -- skip auto-detection.
+    robot = UR7eRobot(config.robot_ip, controller="e-series")
     print("[OK] Connected to UR robtic arm.")
 
     gripper = NoGripper() if config.gripper == "none" else RobotiqGripper(robot.rtde_c)

@@ -1,6 +1,8 @@
 """UR7e connection and motion-mode management."""
 
 import logging
+import re
+import socket
 
 import rtde_control
 import rtde_receive
@@ -10,6 +12,48 @@ logger = logging.getLogger(__name__)
 # rtde_receive.RTDEReceiveInterface.getRobotMode() return value meaning
 # "normal operation, capable of running a program" -- see its docstring.
 ROBOT_MODE_RUNNING = 7
+
+# Dashboard Server: up whenever the controller software is running, on both
+# CB3 and e-Series -- see cb3_record.py's preflight() for the same port used
+# as a plain reachability canary.
+DASHBOARD_PORT = 29999
+
+
+def detect_controller_generation(ip: str, timeout: float = 2.0) -> str:
+    """Ask the Dashboard Server for its PolyScope version and classify the
+    controller generation from it: PolyScope 3.x (CB3) reports "cb3";
+    PolyScope 5.x/10.x (e-Series, incl. PolyScope X) reports "e-series".
+
+    Raises RuntimeError if the dashboard can't be reached or parsed --
+    callers should tell the user to pass --controller explicitly instead.
+    """
+    try:
+        with socket.create_connection((ip, DASHBOARD_PORT), timeout=timeout) as sock:
+            reader = sock.makefile("r", encoding="utf-8", newline="\n")
+            reader.readline()  # "Connected: Universal Robots Dashboard Server"
+            sock.sendall(b"PolyscopeVersion\n")
+            reply = reader.readline().strip()
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not reach the Dashboard Server at {ip}:{DASHBOARD_PORT} to "
+            f"auto-detect the controller generation ({exc}). Pass --controller "
+            "explicitly ('e-series' or 'cb3')."
+        ) from exc
+
+    # Reply is e.g. "URSoftware 3.13.0.10253 (三月 22 2020)" (CB3) or
+    # "5.9.4.10151470 (Aug 2 2022)" (e-Series) -- prefix/locale vary, so pull
+    # out the first x.y.z-style version number rather than assuming a shape.
+    match = re.search(r"\d+(?:\.\d+){2,}", reply)
+    if not match:
+        raise RuntimeError(
+            f"Could not parse a PolyScope version from Dashboard Server reply "
+            f"{reply!r}. Pass --controller explicitly ('e-series' or 'cb3')."
+        )
+    major = int(match.group().split(".", 1)[0])
+
+    generation = "cb3" if major < 5 else "e-series"
+    logger.info("Detected controller=%s (PolyScope %s)", generation, reply)
+    return generation
 
 
 class UR7eRobot:
@@ -21,9 +65,11 @@ class UR7eRobot:
     the e-Series freedriveMode()/endFreedriveMode().
     """
 
-    def __init__(self, ip: str, controller: str = "e-series"):
+    def __init__(self, ip: str, controller: str = "auto"):
         self.ip = ip
-        self.controller = controller
+        self.controller = (
+            detect_controller_generation(ip) if controller == "auto" else controller
+        )
         # rtde_c first: its constructor uploads/starts the External Control
         # URScript on the controller, which resets the robot's RTDE server
         # session. Connecting rtde_r before that reset can leave it stuck
