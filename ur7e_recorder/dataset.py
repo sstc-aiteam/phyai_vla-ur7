@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-import cv2
+import av
 import pandas as pd
 
 from .config import RecorderConfig
@@ -94,11 +94,22 @@ class LeRobotDatasetWriter:
                           / f"episode_{ep_idx:06d}.mp4")
 
             h, w = frames[0].shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(str(video_path), fourcc, self.fps, (w, h))
+            # cv2's bundled FFmpeg on this platform only exposes a hardware
+            # h264_v4l2m2m encoder (fails without a v4l2 device), so encode
+            # H.264 via PyAV/libx264 directly instead of cv2.VideoWriter.
+            container = av.open(str(video_path), mode="w")
+            stream = container.add_stream("libx264", rate=self.fps)
+            stream.width = w
+            stream.height = h
+            stream.pix_fmt = "yuv420p"
+            stream.options = {"crf": "23", "preset": "medium"}
             for frame in frames:
-                writer.write(frame)
-            writer.release()
+                video_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
+                for packet in stream.encode(video_frame):
+                    container.mux(packet)
+            for packet in stream.encode():  # flush
+                container.mux(packet)
+            container.close()
 
     def _append_episode_record(self, ep_idx: int, length: int):
         with open(self.episodes_file, "a") as f:

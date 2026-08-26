@@ -32,7 +32,7 @@ class CameraConfig:
     index: int
     width: int = 640
     height: int = 480
-    fps: int = 30
+    fps: int = 5
     backend: str = CAMERA_BACKENDS[0]  # "usb" (cv2.VideoCapture) or "realsense" (pyrealsense2)
 
 
