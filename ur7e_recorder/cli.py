@@ -99,6 +99,10 @@ def main():
     if not camera_configs:
         print("[WARN] No cameras configured. Recording state-only dataset.")
     cam_mgr = CameraManager(camera_configs) if camera_configs else None
+    # Measured from a real captured frame -- a camera doesn't always honor
+    # its configured resolution, and the dataset's video features (fixed
+    # at creation time) must match what will actually be recorded.
+    camera_shapes = cam_mgr.frame_shapes() if cam_mgr else {}
 
     print(f"Connecting to UR arm at {config.robot_ip}...")
     robot = UR7eRobot(config.robot_ip, controller=config.controller)
@@ -110,7 +114,7 @@ def main():
         gripper = RobotiqGripper(robot.rtde_c)
         gripper.open()
 
-    writer = LeRobotDatasetWriter(config, camera_names=list(camera_configs.keys()))
+    writer = LeRobotDatasetWriter(config, camera_shapes=camera_shapes)
 
     session = RecordingSession(
         robot=robot,

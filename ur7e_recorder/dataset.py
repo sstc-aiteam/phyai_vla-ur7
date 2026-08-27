@@ -1,154 +1,109 @@
-"""LeRobot v2 dataset writer (Parquet + MP4)."""
+"""LeRobot v3 dataset writer.
 
-import json
-from pathlib import Path
+Thin wrapper around `lerobot.datasets.lerobot_dataset.LeRobotDataset` --
+the official dataset class from the `lerobot` package -- so recordings
+come out as spec-compliant LeRobot v3.0 datasets (chunked Parquet +
+H.264 MP4, `meta/episodes/` + `meta/stats.json`) instead of a hand-rolled
+approximation of the format.
+"""
 
-import av
-import pandas as pd
+import cv2
+import numpy as np
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 from .config import RecorderConfig
-from .episode import EpisodeRecorder
 
 STATE_NAMES = [
     "shoulder_pan", "shoulder_lift", "elbow",
     "wrist_1", "wrist_2", "wrist_3", "gripper",
 ]
 
+# PNG frames for the episode currently being recorded are written to disk
+# by background threads (one camera's worth of writes shouldn't stall the
+# freedrive control loop waiting on the other camera's disk I/O).
+IMAGE_WRITER_THREADS_PER_CAMERA = 4
+
 
 class LeRobotDatasetWriter:
-    """Writes episodes to LeRobot v2 dataset format on disk."""
+    """Records UR7e episodes directly into a LeRobot v3.0 dataset on disk."""
 
-    def __init__(self, config: RecorderConfig, camera_names: list):
-        self.dataset_dir = Path(config.dataset_name)
-        self.fps = config.fps
+    def __init__(self, config: RecorderConfig, camera_shapes: dict[str, tuple[int, int, int]]):
+        """camera_shapes: {name: (height, width, channels)} for every
+        enabled camera, measured from a real captured frame -- the
+        dataset's video features are fixed at creation time, so this must
+        match what `add_step` will actually pass in.
+        """
         self.task = config.task
         self.robot_type = config.robot_type
-        self.camera_names = camera_names
+        self.camera_names = list(camera_shapes)
         self.episode_count = 0
 
-        self._init_directory_layout()
-        self._init_tasks_file()
-        self.episodes_file = self.dataset_dir / "meta" / "episodes.jsonl"
-        open(self.episodes_file, "w").close()
+        features = {
+            "observation.state": {
+                "dtype": "float32", "shape": (len(STATE_NAMES),), "names": STATE_NAMES,
+            },
+            "action": {
+                "dtype": "float32", "shape": (len(STATE_NAMES),), "names": STATE_NAMES,
+            },
+            **{
+                f"observation.images.{cam}": {
+                    "dtype": "video", "shape": shape, "names": ["height", "width", "channels"],
+                }
+                for cam, shape in camera_shapes.items()
+            },
+        }
 
-    def _init_directory_layout(self):
-        (self.dataset_dir / "meta").mkdir(parents=True, exist_ok=True)
-        (self.dataset_dir / "data" / "chunk-000").mkdir(parents=True, exist_ok=True)
-        for cam in self.camera_names:
-            (self.dataset_dir / "videos" / "chunk-000"
-             / f"observation.images.{cam}").mkdir(parents=True, exist_ok=True)
+        self.ds = LeRobotDataset.create(
+            repo_id=config.dataset_name,
+            fps=config.fps,
+            features=features,
+            root=config.dataset_name,
+            robot_type=self.robot_type,
+            use_videos=bool(self.camera_names),
+            vcodec="h264",
+            image_writer_processes=0,
+            image_writer_threads=IMAGE_WRITER_THREADS_PER_CAMERA * len(self.camera_names),
+        )
 
-    def _init_tasks_file(self):
-        self.tasks_file = self.dataset_dir / "meta" / "tasks.jsonl"
-        with open(self.tasks_file, "w") as f:
-            f.write(json.dumps({"task_index": 0, "task": self.task}) + "\n")
+    @property
+    def num_steps(self) -> int:
+        """Steps buffered so far for the episode currently being recorded."""
+        return self.ds.episode_buffer["size"] if self.ds.episode_buffer else 0
 
-    def save_episode(self, episode: EpisodeRecorder) -> bool:
-        """Save a single episode to parquet + mp4 files."""
-        if episode.num_steps < 2:
+    def add_step(self, state: list, action: list, camera_frames: dict):
+        """Buffer one step of the episode currently being recorded.
+        `camera_frames` is {cam_name: BGR frame}, as produced by CameraManager.
+        """
+        frame = {
+            "observation.state": np.asarray(state, dtype=np.float32),
+            "action": np.asarray(action, dtype=np.float32),
+            "task": self.task,
+        }
+        for cam_name, bgr_frame in camera_frames.items():
+            frame[f"observation.images.{cam_name}"] = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        self.ds.add_frame(frame)
+
+    def discard_episode(self):
+        """Drop the episode currently being recorded without saving it."""
+        self.ds.clear_episode_buffer()
+
+    def save_episode(self) -> bool:
+        """Encode and save the episode currently being recorded."""
+        if self.num_steps < 2:
             print("[WARN] Episode too short, skipping.")
+            self.discard_episode()
             return False
 
         ep_idx = self.episode_count
-        self._write_parquet(episode, ep_idx)
-        self._write_videos(episode, ep_idx)
-        self._append_episode_record(ep_idx, episode.num_steps)
-
+        n_steps = self.num_steps
+        self.ds.save_episode()
         self.episode_count += 1
-        print(f"[SAVED] Episode {ep_idx} — {episode.num_steps} steps")
+        print(f"[SAVED] Episode {ep_idx} — {n_steps} steps")
         return True
 
-    def _write_parquet(self, episode: EpisodeRecorder, ep_idx: int):
-        n_steps = episode.num_steps
-        # For actions, shift states by 1 (action = next state)
-        actions = episode.states[1:] + [episode.states[-1]]
-
-        rows = []
-        for i in range(n_steps):
-            row = {
-                "episode_index": ep_idx,
-                "frame_index": i,
-                "timestamp": episode.timestamps[i] - episode.timestamps[0],
-                "task_index": 0,
-                "next.done": i == n_steps - 1,
-            }
-            for j, value in enumerate(episode.states[i]):
-                row[f"observation.state.{j}"] = value
-            for j, value in enumerate(actions[i]):
-                row[f"action.{j}"] = value
-            rows.append(row)
-
-        df = pd.DataFrame(rows)
-        parquet_path = (self.dataset_dir / "data" / "chunk-000"
-                        / f"episode_{ep_idx:06d}.parquet")
-        df.to_parquet(parquet_path, index=False)
-
-    def _write_videos(self, episode: EpisodeRecorder, ep_idx: int):
-        for cam_name in self.camera_names:
-            frames = episode.frames.get(cam_name)
-            if not frames:
-                continue
-
-            video_path = (self.dataset_dir / "videos" / "chunk-000"
-                          / f"observation.images.{cam_name}"
-                          / f"episode_{ep_idx:06d}.mp4")
-
-            h, w = frames[0].shape[:2]
-            # cv2's bundled FFmpeg on this platform only exposes a hardware
-            # h264_v4l2m2m encoder (fails without a v4l2 device), so encode
-            # H.264 via PyAV/libx264 directly instead of cv2.VideoWriter.
-            container = av.open(str(video_path), mode="w")
-            stream = container.add_stream("libx264", rate=self.fps)
-            stream.width = w
-            stream.height = h
-            stream.pix_fmt = "yuv420p"
-            stream.options = {"crf": "23", "preset": "medium"}
-            for frame in frames:
-                video_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
-                for packet in stream.encode(video_frame):
-                    container.mux(packet)
-            for packet in stream.encode():  # flush
-                container.mux(packet)
-            container.close()
-
-    def _append_episode_record(self, ep_idx: int, length: int):
-        with open(self.episodes_file, "a") as f:
-            f.write(json.dumps({
-                "episode_index": ep_idx,
-                "length": length,
-                "task_index": 0,
-                "task": self.task,
-            }) + "\n")
-
-    def write_info(self):
-        """Write the final info.json metadata file."""
-        state_dim = len(STATE_NAMES)
-        info = {
-            "codebase_version": "v2.0",
-            "robot_type": self.robot_type,
-            "fps": self.fps,
-            "total_episodes": self.episode_count,
-            "features": {
-                "observation.state": {
-                    "dtype": "float64",
-                    "shape": [state_dim],
-                    "names": STATE_NAMES,
-                },
-                "action": {
-                    "dtype": "float64",
-                    "shape": [state_dim],
-                    "names": STATE_NAMES,
-                },
-                **{
-                    f"observation.images.{cam}": {
-                        "dtype": "video",
-                        "shape": [480, 640, 3],
-                        "names": None,
-                    }
-                    for cam in self.camera_names
-                },
-            },
-        }
-        with open(self.dataset_dir / "meta" / "info.json", "w") as f:
-            json.dump(info, f, indent=2)
-        print(f"[INFO] Dataset saved: {self.episode_count} episodes → {self.dataset_dir}")
+    def finalize(self):
+        """Flush metadata to disk. Must be called once, after the last
+        episode is saved -- without it the dataset's episode index isn't
+        fully written and the dataset can't be loaded back."""
+        self.ds.finalize()
+        print(f"[INFO] Dataset saved: {self.episode_count} episodes → {self.ds.root}")

@@ -3,3 +3,4 @@ opencv-python
 pyarrow
 pandas
 pyrealsense2
+lerobot

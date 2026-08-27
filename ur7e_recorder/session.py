@@ -7,7 +7,6 @@ import time
 from .camera import CameraManager
 from .config import RecorderConfig
 from .dataset import LeRobotDatasetWriter
-from .episode import EpisodeRecorder
 from .gripper import Gripper
 from .keyboard import KeyListener
 from .robot import UR7eRobot
@@ -51,7 +50,6 @@ class RecordingSession:
             "s": self._handle_toggle_recording,
         }
 
-        self.episode = None
         self.recording = False
         self.episodes_recorded = 0
         self._quit = False
@@ -79,8 +77,13 @@ class RecordingSession:
             if self.cam_mgr:
                 self.cam_mgr.release()
             self.keys.stop()
+            # Quitting or an interrupt mid-episode shouldn't leave a
+            # half-written episode buffer (and its temp frame images)
+            # behind uncommitted.
+            if self.recording:
+                self.writer.discard_episode()
 
-        self.writer.write_info()
+        self.writer.finalize()
         return self.episodes_recorded
 
     def _loop(self):
@@ -90,7 +93,7 @@ class RecordingSession:
 
             self._handle_keys()
 
-            if self.recording and self.episode is not None:
+            if self.recording:
                 self._record_step()
 
             elapsed = time.time() - loop_start
@@ -120,20 +123,17 @@ class RecordingSession:
     def _handle_discard(self):
         if self.recording:
             self.recording = False
-            self.episode = None
+            self.writer.discard_episode()
             print("  [DISCARDED] Episode discarded.")
 
     def _handle_toggle_recording(self):
         if not self.recording:
-            self.episode = EpisodeRecorder()
             self.recording = True
             print(f"  [REC] Recording episode {self.episodes_recorded}...")
         else:
             self.recording = False
-            if self.episode and self.episode.num_steps > 1:
-                if self.writer.save_episode(self.episode):
-                    self.episodes_recorded += 1
-            self.episode = None
+            if self.writer.save_episode():
+                self.episodes_recorded += 1
             print(f"  Progress: {self.episodes_recorded}/{self.num_episodes}")
 
     def _record_step(self):
@@ -143,16 +143,11 @@ class RecordingSession:
         action = state.copy()
         camera_frames = self.cam_mgr.read_all() if self.cam_mgr else {}
 
-        self.episode.add_step(
-            timestamp=time.time(),
-            state=state,
-            action=action,
-            camera_frames=camera_frames,
-        )
+        self.writer.add_step(state=state, action=action, camera_frames=camera_frames)
 
-        if self.episode.num_steps % self.fps == 0:
-            elapsed = self.episode.num_steps / self.fps
-            print(f"    ... {self.episode.num_steps} steps ({elapsed:.1f}s)")
+        if self.writer.num_steps % self.fps == 0:
+            elapsed = self.writer.num_steps / self.fps
+            print(f"    ... {self.writer.num_steps} steps ({elapsed:.1f}s)")
 
     def _check_stuck_readings(self, joint_positions: list):
         """Warn once if get_joint_positions() stops changing for a full

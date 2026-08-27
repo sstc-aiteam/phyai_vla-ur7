@@ -145,6 +145,13 @@ class CameraManager:
             frames[name] = frame
         return frames
 
+    def frame_shapes(self) -> dict:
+        """{name: (height, width, channels)}, measured from a real
+        captured frame -- a camera doesn't always honor its configured
+        resolution, and the dataset's video features must match exactly
+        what `read_all()` will actually produce."""
+        return {name: frame.shape for name, frame in self.read_all().items()}
+
     def release(self):
         for camera in self.cameras.values():
             camera.release()

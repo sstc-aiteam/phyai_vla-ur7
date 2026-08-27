@@ -41,7 +41,7 @@ class RecorderConfig:
     robot_ip: str = "192.168.50.76"
     dataset_name: str = "ur7e_pick_and_place_dataset"
     num_episodes: int = 5                           #50
-    fps: int = 10                                   #1
+    fps: int = 5                                    #1
     task: str = "task description in here"
     cam_overhead: int = -1                          # -1 => disabled
     cam_overhead_backend: str = CAMERA_BACKENDS[0]
@@ -57,11 +57,11 @@ class RecorderConfig:
         configs = {}
         if self.cam_overhead >= 0:
             configs["cam_overhead"] = CameraConfig(
-                index=self.cam_overhead, backend=self.cam_overhead_backend
+                index=self.cam_overhead, backend=self.cam_overhead_backend, fps=self.fps
             )
         if self.cam_wrist >= 0:
             configs["cam_wrist"] = CameraConfig(
-                index=self.cam_wrist, backend=self.cam_wrist_backend
+                index=self.cam_wrist, backend=self.cam_wrist_backend, fps=self.fps
             )
         return configs
 

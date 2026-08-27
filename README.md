@@ -1,15 +1,16 @@
 # phyai_vla-ur7
 
 Free-drive pick-and-place demonstration recorder for UR arms, producing
-datasets in [LeRobot](https://github.com/huggingface/lerobot) v2 format
-(Parquet state/action + MP4 video) for training VLA policies.
+datasets in [LeRobot](https://github.com/huggingface/lerobot) v3 format
+(chunked Parquet state/action + H.264 MP4 video) for training VLA
+policies, written via the official `lerobot` package's `LeRobotDataset`.
 
 You physically guide the robot in freedrive mode while the recorder logs
 joint state/action and camera frames for each episode.
 
 Built for the UR7e (e-Series), but also drives older CB3 controllers --
 e.g. a UR5 on PolyScope 3.13 -- via `--controller cb3` (see below); every
-recording, regardless of arm, is written in the same LeRobot v2 layout.
+recording, regardless of arm, is written in the same LeRobot v3 layout.
 
 ## Requirements
 
@@ -41,9 +42,9 @@ python lerobot.record.py \
     --robot-ip 192.168.50.75 \
     --dataset-name my_pick_and_place \
     --num-episodes 50 \
-    --fps 30 \
+    --fps 1 \
     --task "Pick up the object and place it in the bin" \
-    --cam-overhead 0 --cam-wrist 2 --cam-wrist-backend realsense
+    --cam-wrist 0 --cam-wrist-backend realsense
 ```
 
 | Flag | Default | Description |
@@ -166,11 +167,10 @@ ur7e_recorder/          Recorder implementation
     gripper/            Gripper interface, RobotiqGripper, NoGripper (--gripper none)
     robot.py            UR RTDE connection lifecycle (e-Series freedriveMode or CB3 teachMode)
     camera.py           Camera interface (USBCamera, RealSenseCamera) + CameraManager
-    episode.py          EpisodeRecorder (per-episode buffer)
-    dataset.py          LeRobotDatasetWriter (LeRobot v2 format on disk)
+    dataset.py          LeRobotDatasetWriter (wraps lerobot's LeRobotDataset, v3 format on disk)
     session.py          RecordingSession (the recording loop)
     replay.py            EpisodeReplayer (streams a saved episode's actions back to the robot)
     dump.py               load_dataset_joint_states (reads joint state/action data from disk)
     cli.py               Argument parsing and wiring
-ur7e_pick_and_place/    Example/output dataset metadata (LeRobot v2 layout)
+ur7e_pick_and_place/    Example/output dataset metadata (LeRobot v3 layout)
 ```

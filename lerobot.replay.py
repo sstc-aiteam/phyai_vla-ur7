@@ -2,8 +2,9 @@
 """
 UR7e Episode Replayer for LeRobot
 ==================================
-Physically replays one recorded episode by streaming its saved joint and
-gripper actions back to the real UR7e over RTDE.
+Physically replays one recorded episode from a LeRobot v3 dataset by
+streaming its saved joint and gripper actions back to the real UR7e over
+RTDE.
 
 Requirements:
     pip install -r requirements.txt

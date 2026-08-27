@@ -1,4 +1,4 @@
-"""Physical episode replay: reads recorded actions from a LeRobot v2
+"""Physical episode replay: reads recorded actions from a LeRobot v3
 dataset episode and streams them back to the real UR7e over RTDE.
 
 The first waypoint is reached with a slow, blocking `moveJ` so the robot
@@ -9,16 +9,16 @@ play back as smooth motion instead of a series of jerky point-to-point
 moves.
 """
 
-import json
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
 
 from .gripper import Gripper
 from .robot import UR7eRobot
 
-ACTION_DIM = 7  # 6 joints + gripper
 GRIPPER_CLOSED_THRESHOLD = 0.5
 
 # servoJ tuning for tracking closely-spaced recorded waypoints.
@@ -77,19 +77,25 @@ class EpisodeReplayer:
 
     @staticmethod
     def _load_actions(dataset_dir: Path, episode_index: int) -> list:
-        parquet_path = (dataset_dir / "data" / "chunk-000"
-                         / f"episode_{episode_index:06d}.parquet")
-        if not parquet_path.exists():
-            raise FileNotFoundError(f"No such episode: {parquet_path}")
+        meta = EpisodeReplayer._load_meta(dataset_dir)
+        if episode_index >= meta.total_episodes:
+            raise FileNotFoundError(
+                f"No such episode: {episode_index} (dataset has {meta.total_episodes})"
+            )
 
-        df = pd.read_parquet(parquet_path).sort_values("frame_index")
-        action_cols = [f"action.{j}" for j in range(ACTION_DIM)]
-        actions = df[action_cols].values.tolist()
+        data_path = meta.root / meta.get_data_file_path(episode_index)
+        df = pd.read_parquet(data_path)
+        df = df[df["episode_index"] == episode_index].sort_values("frame_index")
+
+        actions = np.stack(df["action"].values).tolist()
         if not actions:
             raise ValueError(f"Episode {episode_index} has no steps.")
         return actions
 
     @staticmethod
     def dataset_fps(dataset_dir: Path) -> int:
-        with open(dataset_dir / "meta" / "info.json") as f:
-            return json.load(f)["fps"]
+        return EpisodeReplayer._load_meta(dataset_dir).fps
+
+    @staticmethod
+    def _load_meta(dataset_dir: Path) -> LeRobotDatasetMetadata:
+        return LeRobotDatasetMetadata(repo_id=dataset_dir.name, root=dataset_dir)

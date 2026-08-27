@@ -3,7 +3,8 @@
 UR7e Free-Drive Pick-and-Place Recorder for LeRobot
 ====================================================
 Records demonstrations by physically guiding the UR7e in freedrive mode.
-Saves data in LeRobot v2 dataset format (Parquet + MP4).
+Saves data in LeRobot v3 dataset format (Parquet + MP4), via the official
+`lerobot` package's `LeRobotDataset`.
 
 Requirements:
     pip install -r requirements.txt
@@ -29,8 +30,7 @@ Implementation lives in the `ur7e_recorder` package:
     gripper.py  - Gripper interface + RobotiqGripper
     robot.py    - UR7e RTDE connection lifecycle
     camera.py   - Camera interface (USBCamera, RealSenseCamera) + CameraManager
-    episode.py  - EpisodeRecorder (per-episode buffer)
-    dataset.py  - LeRobotDatasetWriter (LeRobot v2 format on disk)
+    dataset.py  - LeRobotDatasetWriter (wraps lerobot's LeRobotDataset, v3 format on disk)
     session.py  - RecordingSession (the recording loop)
     cli.py      - argument parsing and wiring
 """
