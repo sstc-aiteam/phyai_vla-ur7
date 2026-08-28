@@ -33,8 +33,7 @@ env/
 # Recorded datasets / media (large binary outputs)
 ur7e_pick_and_place/data/
 ur7e_pick_and_place/videos/
-open_trashcan/
-open_trashcan-lerobotv2/
+open_trashcan*/
 grasp_alcohol_spray_bottle*/
 *.mp4
 *.avi
