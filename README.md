@@ -28,9 +28,9 @@ pip install -r requirements.txt
 
 ## Usage
 
-Three entry point scripts cover the dataset lifecycle: record a dataset,
-replay one of its episodes on the robot, and dump its joint states for
-inspection.
+Four entry point scripts cover the dataset lifecycle: record a dataset,
+replay one of its episodes on the robot, dump its joint states for
+inspection, and concatenate multiple datasets together for training.
 
 ### Recording a dataset
 
@@ -154,12 +154,34 @@ python lerobot.dump_states.py --dataset-name ur7e_pick_and_place --format json  
 `--format` picks the output shape; if omitted it's inferred from
 `--output`'s file extension, defaulting to `table` when printing to stdout.
 
+### Concatenating datasets
+
+Merges two or more recorded datasets into a single combined dataset, e.g.
+to train on multiple recording sessions of the same task together:
+
+```bash
+python lerobot.concat_datasets.py open_trashcan_19 open_trashcan_49 \
+    --output open_trashcan_19_49
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `datasets` | (required, positional) | Two or more source dataset directories to concatenate, in order |
+| `--output` / `-o` | (required) | Path for the new combined dataset directory -- must not already exist |
+
+Source datasets must share the same fps, robot_type, and features schema
+(i.e. recorded with the same robot/camera setup) -- this is enforced by
+the underlying `lerobot` package, which does the actual merge: copying
+and re-chunking the parquet/video files, unioning the per-dataset task
+tables, and re-indexing episodes/frames across the combined dataset.
+
 ## Project layout
 
 ```
 lerobot.record.py       Record entry point script
 lerobot.replay.py       Replay entry point script
 lerobot.dump_states.py  Joint state dump entry point script
+lerobot.concat_datasets.py  Dataset concatenation entry point script
 requirements.txt        Python dependencies
 ur7e_recorder/          Recorder implementation
     config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
