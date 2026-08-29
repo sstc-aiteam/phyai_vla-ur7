@@ -65,6 +65,32 @@ python lerobot.record.py \
 Camera indices of `-1` disable that camera. With no cameras enabled, the
 recorder still runs and produces a state-only dataset.
 
+#### Resuming a recording session
+
+`--dataset-name` decides create-vs-resume on its own: point it at a name
+that doesn't exist yet and a new dataset is created as usual; point it at
+a dataset you already recorded and the recorder appends to it instead,
+picking episode numbering back up where it left off -- no separate flag
+needed:
+
+```bash
+python lerobot.record.py \
+    --robot-ip 192.168.50.75 \
+    --dataset-name my_pick_and_place \
+    --num-episodes 20
+```
+
+If `--dataset-name` exists but doesn't look like a LeRobot dataset (no
+`meta/info.json`), it errors out before touching any hardware rather than
+recording into it. When resuming, it also validates that `--fps`,
+`--robot-type`, and the enabled cameras match what the dataset was
+originally recorded with, since those are fixed at creation time and
+can't be changed mid-dataset.
+
+If you instead have two *separate* dataset directories you want to merge
+after the fact (e.g. recorded in different sessions under different
+names), use [Concatenating datasets](#concatenating-datasets) instead.
+
 To record from a UR5 on a CB3 controller (PolyScope 3.13) with no gripper
 attached, everything else about the workflow -- controls, dataset layout,
 replay, dump -- stays the same:

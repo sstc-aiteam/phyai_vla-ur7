@@ -4,6 +4,7 @@ module never hard-codes a value that isn't just a flag mirror.
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -63,6 +64,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def resolve_resume(dataset_name: str) -> bool:
+    """Decide create-vs-resume from disk alone: --dataset-name pointing at
+    a directory that already holds a dataset means append to it, anything
+    else (including a brand-new name) means create it. Fails fast, before
+    any hardware is touched, if the directory exists but doesn't look like
+    a LeRobot dataset -- LeRobotDataset.create() would otherwise crash on
+    it with a much less clear error."""
+    dataset_dir = Path(dataset_name)
+    has_dataset = (dataset_dir / "meta" / "info.json").is_file()
+
+    if dataset_dir.exists() and not has_dataset:
+        sys.exit(f"[ERROR] {dataset_dir} already exists but doesn't look like a LeRobot "
+                  "dataset (missing meta/info.json). Choose a different --dataset-name.")
+    return has_dataset
+
+
 def parse_config(argv: list | None = None) -> RecorderConfig:
     args = build_arg_parser().parse_args(argv)
     return RecorderConfig(
@@ -78,6 +95,7 @@ def parse_config(argv: list | None = None) -> RecorderConfig:
         controller=args.controller,
         gripper=args.gripper,
         robot_type=args.robot_type,
+        resume=resolve_resume(args.dataset_name),
     )
 
 
@@ -94,6 +112,10 @@ def print_next_steps(dataset_name: str, episodes_recorded: int):
 
 def main():
     config = parse_config()
+    if config.resume:
+        print(f"[INFO] Found existing dataset '{config.dataset_name}' -- resuming (appending new episodes).")
+    else:
+        print(f"[INFO] Creating new dataset '{config.dataset_name}'.")
 
     camera_configs = config.camera_configs
     if not camera_configs:

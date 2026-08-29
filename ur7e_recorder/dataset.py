@@ -36,7 +36,21 @@ class LeRobotDatasetWriter:
         self.task = config.task
         self.robot_type = config.robot_type
         self.camera_names = list(camera_shapes)
-        self.episode_count = 0
+
+        if config.resume:
+            self.ds = LeRobotDataset(
+                repo_id=config.dataset_name,
+                root=config.dataset_name,
+                vcodec="h264",
+            )
+            self._validate_resume(config, camera_shapes)
+            if self.camera_names:
+                self.ds.start_image_writer(
+                    num_processes=0,
+                    num_threads=IMAGE_WRITER_THREADS_PER_CAMERA * len(self.camera_names),
+                )
+            self.episode_count = self.ds.meta.total_episodes
+            return
 
         features = {
             "observation.state": {
@@ -64,6 +78,33 @@ class LeRobotDatasetWriter:
             image_writer_processes=0,
             image_writer_threads=IMAGE_WRITER_THREADS_PER_CAMERA * len(self.camera_names),
         )
+        self.episode_count = 0
+
+    def _validate_resume(self, config: RecorderConfig, camera_shapes: dict[str, tuple[int, int, int]]):
+        """Guard against silently corrupting an existing dataset: a
+        mismatched fps skews every new frame's timestamp, and the video
+        features' (height, width, channels) are fixed at creation time,
+        so a different camera set/resolution can't be appended to it."""
+        errors = []
+        if self.ds.meta.fps != config.fps:
+            errors.append(f"fps={config.fps} does not match the existing dataset's fps={self.ds.meta.fps}")
+        if self.ds.meta.robot_type != self.robot_type:
+            errors.append(f"robot_type={self.robot_type!r} does not match the existing dataset's "
+                           f"robot_type={self.ds.meta.robot_type!r}")
+
+        existing_cams = {
+            key.removeprefix("observation.images."): tuple(ft["shape"])
+            for key, ft in self.ds.features.items()
+            if key.startswith("observation.images.")
+        }
+        new_cams = {cam: tuple(shape) for cam, shape in camera_shapes.items()}
+        if existing_cams != new_cams:
+            errors.append(f"cameras {new_cams} do not match the existing dataset's cameras {existing_cams}")
+
+        if errors:
+            raise ValueError(
+                f"Cannot resume {config.dataset_name!r}: " + "; ".join(errors)
+            )
 
     @property
     def num_steps(self) -> int:

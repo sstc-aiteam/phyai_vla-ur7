@@ -50,6 +50,8 @@ class RecorderConfig:
     controller: str = CONTROLLER_AUTO               # "auto", "e-series", or "cb3"
     gripper: str = GRIPPER_KINDS[0]                 # "robotiq" or "none"
     robot_type: str = "ur7e"                        # stored in the dataset's meta/info.json
+    resume: bool = False                            # auto-set by cli.resolve_resume from whether
+                                                     # dataset_name already exists on disk -- not a flag
 
     @property
     def camera_configs(self) -> dict:
