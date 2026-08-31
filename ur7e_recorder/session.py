@@ -18,6 +18,14 @@ CONTROLS_HELP = """\
     [D] Discard current episode
     [Q] Quit and save dataset"""
 
+# Below this much total swing (radians) across an episode's six arm
+# joints, treat it as the RTDE receive feed having been stuck for the
+# whole episode rather than the human actually holding the arm still --
+# see resync_receive()'s docstring. A real freedrive episode this long
+# always has more drift than this even when the person is trying to
+# hold position.
+FROZEN_EPISODE_RANGE_RAD = 0.01
+
 
 class RecordingSession:
     """Runs the free-drive recording loop until `num_episodes` is reached
@@ -55,11 +63,18 @@ class RecordingSession:
         self._quit = False
 
         # Tripwire for a stuck RTDE receive feed (e.g. getActualQ() frozen
-        # on a stale packet): warn once if joint readings stop changing for
-        # a full second of recording instead of silently saving dead data.
+        # on a stale packet): auto-resync once if joint readings stop
+        # changing for a full second of recording, instead of silently
+        # saving dead data.
         self._last_joint_positions = None
         self._stuck_frames = 0
-        self._stuck_warned = False
+        self._stuck_resynced = False
+
+        # Per-episode min/max of the six arm joints, to catch a feed that
+        # was stuck for the *entire* episode (resync didn't happen to be
+        # triggered, or fired too late) before it ever reaches the dataset.
+        self._episode_min = None
+        self._episode_max = None
 
     def run(self):
         self.keys.start()
@@ -114,11 +129,15 @@ class RecordingSession:
         self.gripper.toggle()
         state_str = "OPEN" if self.gripper.is_open else "CLOSED"
         print(f"  Gripper: {state_str}")
-        # Sending the gripper's URScript command replaces the running
-        # freedrive control script on the controller, which silently ends
-        # freedrive (the arm goes rigid). Re-enter freedrive so the user
-        # can keep guiding it by hand.
+        # The gripper command sends a URScript program to the controller,
+        # which both replaces the running freedrive control script
+        # (silently ending freedrive -- the arm goes rigid) and can leave
+        # the RTDE receive feed stuck on a stale packet (see
+        # resync_receive()). Re-enter freedrive so the user can keep
+        # guiding it by hand, and resync the receive feed so joint
+        # readings are live again.
         self.robot.enable_freedrive()
+        self.robot.resync_receive()
 
     def _handle_discard(self):
         if self.recording:
@@ -129,16 +148,35 @@ class RecordingSession:
     def _handle_toggle_recording(self):
         if not self.recording:
             self.recording = True
+            self._episode_min = None
+            self._episode_max = None
             print(f"  [REC] Recording episode {self.episodes_recorded}...")
         else:
             self.recording = False
-            if self.writer.save_episode():
+            if self._episode_frozen():
+                self.writer.discard_episode()
+                print(
+                    "  [DISCARDED] Joint readings never changed across the whole "
+                    "episode (RTDE receive feed was stuck) -- this would have "
+                    "been a dead episode. Not saved; please redo it."
+                )
+            elif self.writer.save_episode():
                 self.episodes_recorded += 1
             print(f"  Progress: {self.episodes_recorded}/{self.num_episodes}")
+
+    def _episode_frozen(self) -> bool:
+        """True if the just-recorded episode's arm joints never moved
+        beyond FROZEN_EPISODE_RANGE_RAD -- i.e. the receive feed was stuck
+        for its entire duration rather than genuinely holding still."""
+        if self._episode_min is None or self.writer.num_steps < self.fps:
+            return False  # too short to distinguish from a deliberate pause
+        max_range = max(hi - lo for lo, hi in zip(self._episode_min, self._episode_max))
+        return max_range < FROZEN_EPISODE_RANGE_RAD
 
     def _record_step(self):
         joint_positions = self.robot.get_joint_positions()
         self._check_stuck_readings(joint_positions)
+        self._track_episode_range(joint_positions)
         state = joint_positions + [self.gripper.position]
         action = state.copy()
         camera_frames = self.cam_mgr.read_all() if self.cam_mgr else {}
@@ -149,10 +187,18 @@ class RecordingSession:
             elapsed = self.writer.num_steps / self.fps
             print(f"    ... {self.writer.num_steps} steps ({elapsed:.1f}s)")
 
+    def _track_episode_range(self, joint_positions: list):
+        if self._episode_min is None:
+            self._episode_min = list(joint_positions)
+            self._episode_max = list(joint_positions)
+        else:
+            self._episode_min = [min(a, b) for a, b in zip(self._episode_min, joint_positions)]
+            self._episode_max = [max(a, b) for a, b in zip(self._episode_max, joint_positions)]
+
     def _check_stuck_readings(self, joint_positions: list):
-        """Warn once if get_joint_positions() stops changing for a full
-        second, which usually means the RTDE receive feed is stuck on a
-        stale packet rather than the arm actually holding still."""
+        """Auto-recover once if get_joint_positions() stops changing for a
+        full second, which usually means the RTDE receive feed is stuck on
+        a stale packet rather than the arm actually holding still."""
         if self._last_joint_positions is not None and all(
             abs(a - b) < 1e-9
             for a, b in zip(joint_positions, self._last_joint_positions)
@@ -160,16 +206,16 @@ class RecordingSession:
             self._stuck_frames += 1
         else:
             self._stuck_frames = 0
-            self._stuck_warned = False
+            self._stuck_resynced = False
         self._last_joint_positions = joint_positions
 
-        if self._stuck_frames >= self.fps and not self._stuck_warned:
+        if self._stuck_frames >= self.fps and not self._stuck_resynced:
             print(
-                "  [WARN] Joint readings haven't changed in ~1s. If the arm "
-                "is actually moving, the RTDE receive feed is likely stuck "
-                "— restart the recorder."
+                "  [WARN] Joint readings haven't changed in ~1s -- the RTDE "
+                "receive feed looks stuck. Resyncing it..."
             )
-            self._stuck_warned = True
+            self.robot.resync_receive()
+            self._stuck_resynced = True
 
     def _print_banner(self):
         camera_names = self.cam_mgr.names if self.cam_mgr else []

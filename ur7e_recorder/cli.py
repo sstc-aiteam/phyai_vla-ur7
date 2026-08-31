@@ -135,6 +135,10 @@ def main():
     else:
         gripper = RobotiqGripper(robot.rtde_c)
         gripper.open()
+        # activate()/open() above each send a URScript program to the
+        # controller, which can leave the RTDE receive feed stuck on a
+        # stale packet -- see UR7eRobot.resync_receive()'s docstring.
+        robot.resync_receive()
 
     writer = LeRobotDatasetWriter(config, camera_shapes=camera_shapes)
 

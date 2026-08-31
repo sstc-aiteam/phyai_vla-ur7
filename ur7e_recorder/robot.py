@@ -82,6 +82,25 @@ class UR7eRobot:
         """Current joint positions in radians (6 values)."""
         return list(self.rtde_r.getActualQ())
 
+    def resync_receive(self):
+        """Rebuild the RTDE receive interface.
+
+        Sending *any* URScript program to the controller -- not just the
+        one-time External Control upload in `__init__` -- replaces
+        whatever program is currently running there and can reset the
+        robot's RTDE server session the same way (see the ordering
+        comment above). When that happens, `self.rtde_r` doesn't raise;
+        it just gets stuck silently replaying its last-received packet,
+        so `get_joint_positions()` looks fine but stops changing.
+
+        Call this after anything that sends a custom URScript to the
+        controller mid-session (gripper commands via
+        `sendCustomScriptFunction`, in particular) to make sure joint
+        readings are live again afterward.
+        """
+        self.rtde_r.disconnect()
+        self.rtde_r = rtde_receive.RTDEReceiveInterface(self.ip)
+
     def _freedrive_preflight_issue(self) -> str | None:
         """Return a specific reason freedrive would be rejected, or None if clear."""
         if self.rtde_r.isEmergencyStopped():
