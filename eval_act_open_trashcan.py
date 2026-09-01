@@ -43,12 +43,12 @@ def main():
 
     ckpt = Path(args.checkpoint)
     print(f"Loading policy from {ckpt}")
-    policy = ACTPolicy.from_pretrained(ckpt)
-    policy.to(args.device)
-    policy.eval()
+    policy = ACTPolicy.from_pretrained(ckpt, device=args.device)
+    device_override = {"device_processor": {"device": policy.config.device}}
 
     preprocessor, postprocessor = make_pre_post_processors(
-        policy.config, pretrained_path=ckpt, dataset_stats=None
+        policy.config, pretrained_path=ckpt, dataset_stats=None,
+        preprocessor_overrides=device_override, postprocessor_overrides=device_override,
     )
 
     root = Path(args.dataset_name)

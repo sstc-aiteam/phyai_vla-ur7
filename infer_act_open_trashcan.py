@@ -78,11 +78,11 @@ def main():
     args = build_arg_parser().parse_args()
 
     print(f"Loading policy from {args.checkpoint}")
-    policy = ACTPolicy.from_pretrained(Path(args.checkpoint))
-    policy.to(args.device)
-    policy.eval()
+    policy = ACTPolicy.from_pretrained(Path(args.checkpoint), device=args.device)
+    device_override = {"device_processor": {"device": policy.config.device}}
     preprocessor, postprocessor = make_pre_post_processors(
-        policy.config, pretrained_path=Path(args.checkpoint), dataset_stats=None
+        policy.config, pretrained_path=Path(args.checkpoint), dataset_stats=None,
+        preprocessor_overrides=device_override, postprocessor_overrides=device_override,
     )
 
     cam_mgr = CameraManager({
