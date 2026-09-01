@@ -103,11 +103,17 @@ def print_next_steps(dataset_name: str, episodes_recorded: int):
     print(f"\nDone! {episodes_recorded} episodes saved to ./{dataset_name}/")
     print("\nNext steps:")
     print(f"  1. Inspect:  lerobot-dataset-viz --repo-id {dataset_name} --mode local")
-    print("  2. Train:    python -m lerobot.train \\")
+    print(f"  2. Verify:   python lerobot.verify_dataset.py --dataset-name {dataset_name}")
+    print("  3. Train:    python -m lerobot.scripts.lerobot_train \\")
     print(f"                 --dataset.repo_id={dataset_name} \\")
+    print(f"                 --dataset.root=./{dataset_name} \\")
+    print("                 --dataset.video_backend=pyav \\")
     print("                 --policy.type=act \\")
+    print("                 --policy.push_to_hub=false \\")
     print(f"                 --output_dir=outputs/act_{dataset_name}")
-    print(f"  3. Push:     huggingface-cli upload <user>/{dataset_name} ./{dataset_name}")
+    print(f"  4. Push:     huggingface-cli upload <user>/{dataset_name} ./{dataset_name}")
+    print("  See README.md's 'Training an ACT policy' section for why --dataset.video_backend=pyav")
+    print("  is needed and how to run/evaluate the trained policy afterward.")
 
 
 def main():

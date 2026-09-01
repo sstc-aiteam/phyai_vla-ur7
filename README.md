@@ -28,9 +28,11 @@ pip install -r requirements.txt
 
 ## Usage
 
-Four entry point scripts cover the dataset lifecycle: record a dataset,
-replay one of its episodes on the robot, dump its joint states for
-inspection, and concatenate multiple datasets together for training.
+Entry point scripts cover the full lifecycle: record a dataset, replay one
+of its episodes on the robot, dump its joint states for inspection, verify
+its motion quality, concatenate multiple datasets together, train an ACT
+policy on the result, evaluate it open-loop against held-out episodes, and
+run it closed-loop on the real robot.
 
 ### Recording a dataset
 
@@ -120,12 +122,19 @@ Done! <N> episodes saved to ./<dataset_name>/
 
 Next steps:
   1. Inspect:  lerobot-dataset-viz --repo-id <dataset_name> --mode local
-  2. Train:    python -m lerobot.train \
+  2. Verify:   python lerobot.verify_dataset.py --dataset-name <dataset_name>
+  3. Train:    python -m lerobot.scripts.lerobot_train \
                  --dataset.repo_id=<dataset_name> \
+                 --dataset.root=./<dataset_name> \
+                 --dataset.video_backend=pyav \
                  --policy.type=act \
+                 --policy.push_to_hub=false \
                  --output_dir=outputs/act_<dataset_name>
-  3. Push:     huggingface-cli upload <user>/<dataset_name> ./<dataset_name>
+  4. Push:     huggingface-cli upload <user>/<dataset_name> ./<dataset_name>
 ```
+
+See [Verifying dataset motion](#verifying-dataset-motion) and
+[Training an ACT policy](#training-an-act-policy) below.
 
 ### Replaying an episode
 
@@ -180,6 +189,29 @@ python lerobot.dump_states.py --dataset-name ur7e_pick_and_place --format json  
 `--format` picks the output shape; if omitted it's inferred from
 `--output`'s file extension, defaulting to `table` when printing to stdout.
 
+### Verifying dataset motion
+
+Checks every episode of a saved dataset for "frozen" arm motion -- i.e.
+the 6 UR arm joints barely move across the whole episode, which usually
+means the RTDE receive feed got stuck for that episode rather than the
+human genuinely holding the arm still (the same check `RecordingSession`
+already runs live during recording via `FROZEN_EPISODE_RANGE_RAD`, here
+run after the fact over an entire dataset):
+
+```bash
+python lerobot.verify_dataset.py --dataset-name open_trashcan
+python lerobot.verify_dataset.py --dataset-name open_trashcan --threshold 0.02
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dataset-name` | `open_trashcan` | Dataset directory to check |
+| `--threshold` | `0.01` (rad) | Minimum required arm-joint range, below which an episode is flagged `FROZEN` |
+
+Prints a per-episode table sorted by ascending arm range and exits `1` if
+any episode is flagged, `0` otherwise -- worth running before spending a
+training run on a dataset, and safe to script/gate on the exit code.
+
 ### Concatenating datasets
 
 Merges two or more recorded datasets into a single combined dataset, e.g.
@@ -201,13 +233,114 @@ the underlying `lerobot` package, which does the actual merge: copying
 and re-chunking the parquet/video files, unioning the per-dataset task
 tables, and re-indexing episodes/frames across the combined dataset.
 
+### Training an ACT policy
+
+This repo only produces the dataset -- training itself is delegated to
+the `lerobot` package's own trainer:
+
+```bash
+python -m lerobot.scripts.lerobot_train \
+    --dataset.repo_id=open_trashcan \
+    --dataset.root=./open_trashcan \
+    --dataset.video_backend=pyav \
+    --policy.type=act \
+    --policy.push_to_hub=false \
+    --output_dir=outputs/act_open_trashcan \
+    --job_name=act_open_trashcan \
+    --batch_size=8 \
+    --steps=100000 \
+    --wandb.enable=false
+```
+
+Notes:
+
+- `--dataset.root` is required since a dataset recorded by this repo is a
+  local directory, not something pulled from the HF Hub.
+- `--dataset.video_backend=pyav` matters: the trainer's default backend,
+  `torchcodec`, needs FFmpeg shared libraries that aren't always
+  installed, and fails the whole run mid-dataloader if they're missing.
+  `pyav` (already a `lerobot` dependency) avoids that. If `torchcodec`
+  does work in your environment you can drop this flag.
+- `--policy.push_to_hub=false` avoids requiring HF write auth (`lerobot`
+  defaults this to `true`).
+- Checkpoints land at `outputs/act_<dataset_name>/checkpoints/<step|last>/pretrained_model`
+  (`--save_freq`, default every 20000 steps, plus a final save aliased
+  `last`) -- the path both `eval_act_open_trashcan.py` and
+  `infer_act_open_trashcan.py` default to.
+- `--batch_size`/`--steps` above are `lerobot`'s own defaults, a
+  reasonable single-task baseline; a 50-episode/~5K-frame dataset like
+  `open_trashcan` trains in roughly an hour on a single modern GPU.
+
+### Evaluating a trained policy (open-loop)
+
+`eval_act_open_trashcan.py` replays each selected episode's recorded
+observations frame-by-frame through the trained policy (same action-queue
+behavior as real inference) and compares predicted vs. ground-truth
+actions -- a quick sanity check that doesn't touch the robot:
+
+```bash
+python eval_act_open_trashcan.py \
+    --checkpoint outputs/act_open_trashcan/checkpoints/last/pretrained_model \
+    --dataset-name open_trashcan \
+    --num-episodes 6 \
+    --output outputs/act_open_trashcan_eval.json
+```
+
+Prints per-episode MAE per joint and writes the full predicted/ground-truth
+comparison to `--output` for later visualization.
+
+### Running inference on the real robot
+
+`infer_act_open_trashcan.py` runs the trained policy closed-loop on the
+physical arm: read state + wrist camera, predict an action, stream it via
+`servoJ` (same motion pattern as [Replaying an episode](#replaying-an-episode)),
+repeat at `--fps`:
+
+```bash
+python infer_act_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/act_open_trashcan/checkpoints/last/pretrained_model \
+    --cam-wrist-index 0 --cam-wrist-backend realsense \
+    --num-steps 100
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--checkpoint` | `outputs/act_open_trashcan/checkpoints/last/pretrained_model` | Trained policy to load |
+| `--robot-ip` | `192.168.50.76` | UR7e IP address |
+| `--gripper` | `none` | Must match how the dataset was recorded |
+| `--cam-wrist-index` | (required) | Camera index for the wrist view -- must match how the dataset was recorded |
+| `--cam-wrist-backend` | `realsense` | `usb` or `realsense` |
+| `--task` | `task description in here` | Task string the policy was conditioned on |
+| `--fps` | `5` | Control rate in Hz -- match the training fps |
+| `--num-steps` | `100` | Stop after this many control steps |
+| `--max-step-rad` | `0.05` | Safety clamp: max joint delta per control step |
+| `--start-speed` / `--start-acceleration` | `0.1` / `0.3` | For the initial blocking move to the policy's first predicted pose |
+
+**Safety:** the arm moves on its own from a live model prediction, with no
+collision checking -- clear the workspace, keep a hand near the pendant's
+e-stop, and press `Q` (checked once per control step) at the first sign of
+trouble. `--max-step-rad` bounds how far any joint can move in a single
+step, guarding against a bad/out-of-distribution prediction commanding a
+large jump, but it does not know about obstacles. Start with a short
+`--num-steps` run to sanity-check the initial move before letting it run
+longer.
+
+`eval_act_open_trashcan.py` and `infer_act_open_trashcan.py` are written
+for the `open_trashcan` dataset/task specifically (single wrist camera,
+7-dim state/action, hardcoded defaults) -- copy and adjust their defaults
+for a different dataset.
+
 ## Project layout
 
 ```
-lerobot.record.py       Record entry point script
-lerobot.replay.py       Replay entry point script
-lerobot.dump_states.py  Joint state dump entry point script
+lerobot.record.py           Record entry point script
+lerobot.replay.py           Replay entry point script
+lerobot.dump_states.py      Joint state dump entry point script
+lerobot.verify_dataset.py   Dataset motion-verification entry point script
 lerobot.concat_datasets.py  Dataset concatenation entry point script
+eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (open_trashcan-specific)
+infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
 requirements.txt        Python dependencies
 ur7e_recorder/          Recorder implementation
     config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
@@ -221,4 +354,5 @@ ur7e_recorder/          Recorder implementation
     dump.py               load_dataset_joint_states (reads joint state/action data from disk)
     cli.py               Argument parsing and wiring
 ur7e_pick_and_place/    Example/output dataset metadata (LeRobot v3 layout)
+outputs/                Training runs: outputs/act_<dataset_name>/checkpoints/<step|last>/pretrained_model
 ```
