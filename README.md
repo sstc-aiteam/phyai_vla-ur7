@@ -131,6 +131,8 @@ Next steps:
                  --policy.push_to_hub=false \
                  --output_dir=outputs/act_<dataset_name>
   4. Push:     huggingface-cli upload <user>/<dataset_name> ./<dataset_name>
+               Or finetune NVIDIA GR00T N1.7 -- see
+               [Finetuning GR00T N1.7](#finetuning-groot-n17) below
 ```
 
 See [Verifying dataset motion](#verifying-dataset-motion) and
@@ -304,6 +306,54 @@ python infer_act_open_trashcan.py \
     --num-steps 100
 ```
 
+## Finetuning GR00T N1.7
+
+Finetunes [NVIDIA Isaac GR00T N1.7](https://huggingface.co/nvidia/GR00T-N1.7-3B)
+directly against a local LeRobot v3 dataset (no conversion needed), via the
+`lerobot` package's native `--policy.type=groot` support. This lives in a
+**separate Python 3.12 environment**, cloned as a sibling directory next to
+this repo -- GR00T needs a much heavier/newer ML stack than the plain
+robot-recording deps in `requirements.txt`, so the two are kept fully
+isolated. No changes are made to this repo's own environment.
+
+**Before you start:** GR00T-N1.7's VLM backbone
+(`nvidia/Cosmos-Reason2-2B`) is a *gated* Hugging Face model. Accept its
+license at <https://huggingface.co/nvidia/Cosmos-Reason2-2B>, then log in
+with a token that has access (do this inside the GR00T venv after setup):
+
+```bash
+uv run --project ../lerobot-groot hf auth login
+```
+
+### One-time setup
+
+```bash
+scripts/setup_groot_env.sh
+```
+
+Clones `huggingface/lerobot` to `../lerobot-groot` (or updates it if it
+already exists), creates a `uv`-managed Python 3.12 venv there, and
+installs `lerobot[groot,training]` into it.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dir` | `../lerobot-groot` | Where to clone the GR00T-enabled `lerobot` checkout |
+| `--ref` | `main` | Git ref to check out |
+
+### Training
+
+```bash
+scripts/train_groot.sh --dataset-dir open_trashcan_50
+```
+
+Run a cheap smoke test first to confirm the pipeline (auth, dataset
+loading, GPU) works end-to-end before committing to a full run:
+
+```bash
+scripts/train_groot.sh --dataset-dir open_trashcan_50 \
+    --steps 10 --batch-size 4 --save-freq 5
+```
+
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--checkpoint` | `outputs/act_open_trashcan/checkpoints/last/pretrained_model` | Trained policy to load |
@@ -330,6 +380,61 @@ longer.
 for the `open_trashcan` dataset/task specifically (single wrist camera,
 7-dim state/action, hardcoded defaults) -- copy and adjust their defaults
 for a different dataset.
+| `--dataset-dir` | `open_trashcan_50` | Local LeRobot v3 dataset directory |
+| `--groot-dir` | `../lerobot-groot` | GR00T-enabled `lerobot` checkout from setup |
+| `--output-dir` | `outputs/groot_<dataset-dir>` | Checkpoints/logs |
+| `--job-name` | `<dataset-dir>` | Run name |
+| `--base-model` | `nvidia/GR00T-N1.7-3B` | Base checkpoint to finetune |
+| `--embodiment-tag` | `new_embodiment` | Generic tag for a custom/novel embodiment |
+| `--chunk-size` | `16` | Action chunk size (used for both `chunk_size`/`n_action_steps`) |
+| `--batch-size` | `32` | Scaled down from NVIDIA's published default (64) -- small datasets like this one don't need it |
+| `--steps` | `3000` | Scaled down from NVIDIA's published default (20000) for the same reason |
+| `--save-freq` | `500` | Checkpoint save interval, in steps |
+| `--gpu` | `1` | `CUDA_VISIBLE_DEVICES` for the training process -- check `nvidia-smi` and adjust if GPU 1 is busy or absent |
+| `--wandb` | off | Enable Weights & Biases logging |
+| `--push-to-hub` / `--hub-repo-id` | off | Push the finetuned policy to the HF Hub |
+| `--seed` | `42` | |
+| `--extra-args "..."` | none | Verbatim passthrough to `lerobot-train` for one-off overrides |
+
+Checkpoints and logs land under `--output-dir`. `--steps`/`--batch-size`
+are tuned down from NVIDIA's own example (which targets much larger
+datasets); scale them up if you [concatenate](#concatenating-datasets)
+more recordings of the same task first.
+
+### Offline evaluation
+
+```bash
+scripts/eval_groot.sh --dataset-dir open_trashcan_50
+```
+
+Runs the same forward-pass loss `lerobot-train` uses for its own
+`--eval_steps` held-out evaluation, standalone, against an already-trained
+checkpoint (`outputs/groot_<dataset-dir>/checkpoints/last/pretrained_model`
+by default) -- no gym/simulator needed, since none exists for this task.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dataset-dir` | `open_trashcan_50` | Local LeRobot v3 dataset directory |
+| `--checkpoint` | `outputs/groot_<dataset-dir>/checkpoints/last/pretrained_model` | Saved policy to evaluate |
+| `--groot-dir` | `../lerobot-groot` | GR00T-enabled `lerobot` checkout from setup |
+| `--batch-size` | `16` | |
+| `--num-workers` | `4` | |
+| `--gpu` | `1` | `CUDA_VISIBLE_DEVICES` -- check `nvidia-smi` and adjust |
+
+**Caveat:** by default `train_groot.sh` trains on the entire dataset
+(`--dataset.eval_split=0.0`), so this is an **in-sample** loss -- it
+checks the model fits its own training data, not that it generalizes.
+It's still a useful sanity check (a broken checkpoint shows up
+immediately as a very high or NaN loss), but for a genuine held-out
+number, retrain with a reserved split first:
+
+```bash
+scripts/train_groot.sh --dataset-dir open_trashcan_50 \
+    --extra-args "--dataset.eval_split=0.2 --eval_steps=250"
+```
+
+and watch the `eval_loss` lines `lerobot-train` logs periodically during
+that run.
 
 ## Project layout
 
@@ -342,6 +447,11 @@ lerobot.concat_datasets.py  Dataset concatenation entry point script
 eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (open_trashcan-specific)
 infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
 requirements.txt        Python dependencies
+scripts/
+    setup_groot_env.sh   One-time GR00T N1.7 finetuning env setup (sibling uv/Python-3.12 lerobot checkout)
+    train_groot.sh       GR00T N1.7 finetuning launch wrapper around lerobot-train
+    eval_groot.sh        GR00T N1.7 offline eval launch wrapper (forward-pass loss, no robot/simulator)
+    eval_groot.py        Offline eval implementation (loads a checkpoint + dataset, reports loss)
 ur7e_recorder/          Recorder implementation
     config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
     keyboard.py         Non-blocking key input
