@@ -436,6 +436,37 @@ scripts/train_groot.sh --dataset-dir open_trashcan_50 \
 and watch the `eval_loss` lines `lerobot-train` logs periodically during
 that run.
 
+### Running inference on the real robot
+
+`infer_groot_open_trashcan.py` runs a finetuned GR00T N1.7 checkpoint
+closed-loop on the physical arm -- the GR00T counterpart of
+[infer_act_open_trashcan.py](#running-inference-on-the-real-robot). It needs
+neither of the two GR00T/ACT environments above: this checkpoint was trained
+with `--policy.use_relative_actions=true` (the `train_groot.sh` default), so
+`GrootPolicy.select_action()` -- the simple per-step call ACT's script uses
+-- raises `NotImplementedError` for it outright (decoding relative actions
+one at a time as they're popped from a queue can silently use a stale
+reference state). Instead this script predicts and decodes a full action
+chunk at once, then streams the already-decoded chunk to the robot,
+replanning roughly every `chunk_size` steps (16, for this checkpoint) rather
+than every step. See the script's own module docstring for the full
+explanation.
+
+Because the control loop needs both GR00T (`lerobot[groot,training]`, only
+in `../lerobot-groot`) and real-time UR robot control (`ur-rtde`,
+`pyrealsense2`, only in this repo's own env) in the same process, it runs
+under neither -- use the `phyai_vla-ur7` conda env instead, which already
+has both:
+
+```bash
+conda activate phyai_vla-ur7
+python infer_groot_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/groot_open_trashcan_50/checkpoints/last/pretrained_model \
+    --cam-wrist-index 0 --cam-wrist-backend realsense \
+    --num-steps 100
+```
+
 ## Project layout
 
 ```
@@ -446,6 +477,7 @@ lerobot.verify_dataset.py   Dataset motion-verification entry point script
 lerobot.concat_datasets.py  Dataset concatenation entry point script
 eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (open_trashcan-specific)
 infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
+infer_groot_open_trashcan.py  Closed-loop GR00T N1.7 policy inference on the real robot (open_trashcan_50-specific)
 requirements.txt        Python dependencies
 scripts/
     setup_groot_env.sh   One-time GR00T N1.7 finetuning env setup (sibling uv/Python-3.12 lerobot checkout)
