@@ -138,6 +138,7 @@ class RemoteCamera(Camera):
         self.host = cfg.host
         self.port = cfg.port
         self._frame: np.ndarray | None = None
+        self._frame_count = 0  # bumped on every decoded frame -- lets callers measure real throughput
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._sock: socket.socket | None = None
@@ -181,6 +182,7 @@ class RemoteCamera(Camera):
             if frame is not None:
                 with self._lock:
                     self._frame = frame
+                    self._frame_count += 1
 
     @staticmethod
     def _recv_exact(sock: socket.socket, n: int) -> bytes:
@@ -195,6 +197,12 @@ class RemoteCamera(Camera):
     def read(self) -> np.ndarray | None:
         with self._lock:
             return self._frame.copy() if self._frame is not None else None
+
+    @property
+    def frame_count(self) -> int:
+        """Total frames decoded since connecting -- diagnostic use (see check_remote_camera.py)."""
+        with self._lock:
+            return self._frame_count
 
     def release(self):
         self._stop.set()

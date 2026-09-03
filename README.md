@@ -493,6 +493,27 @@ On the machine with the camera attached (any env with `opencv-python` +
 python camera_server.py --backend realsense --index 0 --port 6000
 ```
 
+**Verify the stream before trusting it for inference.** From the GPU
+machine (or anywhere on the same network), `check_remote_camera.py`
+connects the same way inference will, reports the *actual* measured frame
+rate (not just how often it happens to poll), and saves a snapshot JPEG so
+you can eyeball what the camera sees:
+
+```bash
+python check_remote_camera.py --host <camera-machine-ip> --port 6000
+# add --show for a live cv2 preview window instead, if this machine has a display
+```
+
+A working stream looks like:
+```
+[OK] First frame received: shape=(480, 640, 3), dtype=uint8
+[OK] Snapshot saved to camera_snapshot.jpg -- open it to confirm the camera sees the right thing
+[OK] 74 new frames arrived in 5.0s (~14.8 fps)
+```
+0 fps or a `[FAIL]`/timeout means checking `camera_server.py`'s own console
+output first (did it actually open the camera?), then network reachability
+(firewall, right IP/port) before touching the robot.
+
 On the GPU machine, point inference at it instead of a local `--cam-wrist-index`:
 
 ```bash
@@ -523,6 +544,7 @@ eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (o
 infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
 infer_groot_open_trashcan.py  Closed-loop GR00T N1.7 policy inference on the real robot (open_trashcan_50-specific)
 camera_server.py            Streams a local camera over TCP for the "remote" CameraConfig backend
+check_remote_camera.py      Diagnostic: verifies a camera_server.py stream (rate + snapshot) before trusting it for inference
 requirements.txt        Python dependencies
 scripts/
     setup_groot_env.sh   One-time GR00T N1.7 finetuning env setup (sibling uv/Python-3.12 lerobot checkout)
