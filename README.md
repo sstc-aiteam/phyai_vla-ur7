@@ -452,14 +452,25 @@ replanning roughly every `chunk_size` steps (16, for this checkpoint) rather
 than every step. See the script's own module docstring for the full
 explanation.
 
-Because the control loop needs both GR00T (`lerobot[groot,training]`, only
-in `../lerobot-groot`) and real-time UR robot control (`ur-rtde`,
-`pyrealsense2`, only in this repo's own env) in the same process, it runs
-under neither -- use the `phyai_vla-ur7` conda env instead, which already
-has both:
+Because the control loop needs both GR00T (matching `../lerobot-groot`'s
+schema -- checkpoints trained against its `main`-branch checkout use
+`GrootConfig` fields, e.g. `use_relative_actions`, that older pinned
+`lerobot` releases don't have) *and* real-time UR robot control (`ur-rtde`,
+`pyrealsense2`) in the same process, it needs its own env, **`groot_infer`**
+-- a dedicated Python 3.12 conda env, kept separate from both
+`../lerobot-groot` (missing the robot packages) and this repo's own env
+(missing the `groot`/`training` extras):
 
 ```bash
-conda activate phyai_vla-ur7
+conda create -n groot_infer python=3.12 -y
+conda run -n groot_infer pip install -e "../lerobot-groot[groot,training]"
+conda run -n groot_infer pip install ur-rtde pyrealsense2 opencv-python
+```
+
+Then run:
+
+```bash
+conda activate groot_infer
 python infer_groot_open_trashcan.py \
     --robot-ip 192.168.50.75 \
     --checkpoint outputs/groot_open_trashcan_50/checkpoints/last/pretrained_model \
