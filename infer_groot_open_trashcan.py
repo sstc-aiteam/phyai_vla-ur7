@@ -42,9 +42,19 @@ SAFETY -- read before running:
   * Test at a low --fps/short --num-steps first, and watch the very
     first moveJ (it moves at --start-speed, blocking, from wherever the
     arm currently is to the policy's first predicted pose).
+  * --cam-wrist-backend remote (camera physically attached to a different
+    machine than this one -- see camera_server.py) adds a network hop the
+    other backends don't have. A dropped connection degrades to blank
+    (all-zero) camera frames rather than stopping the script -- this script
+    refuses to start moving the arm until the first real frame arrives, but
+    a connection lost *mid-run* means the policy keeps predicting off a
+    black image, which is unlikely to produce sane actions. Watch the
+    console for "[WARN] RemoteCamera" reconnect messages during a run and
+    be ready to hit [Q] if you see one.
 """
 
 import argparse
+import sys
 import time
 from collections import deque
 from pathlib import Path
@@ -78,9 +88,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
                          help="Inference only moves the arm, never freedrive, so this rarely matters")
     parser.add_argument("--gripper", default="none", choices=GRIPPER_KINDS,
                          help="Must match how open_trashcan_50 was recorded (default: none)")
-    parser.add_argument("--cam-wrist-index", type=int, required=True,
-                         help="Camera index for the wrist view -- must match how open_trashcan_50 was recorded")
-    parser.add_argument("--cam-wrist-backend", default="realsense", choices=("usb", "realsense"))
+    parser.add_argument("--cam-wrist-index", type=int, default=None,
+                         help="Camera index for the wrist view -- must match how open_trashcan_50 was "
+                              "recorded. Required for --cam-wrist-backend usb/realsense; unused for remote.")
+    parser.add_argument("--cam-wrist-backend", default="realsense", choices=("usb", "realsense", "remote"),
+                         help="'remote' reads from a camera_server.py process over TCP instead of a "
+                              "locally attached camera -- see --cam-wrist-host/--cam-wrist-port")
+    parser.add_argument("--cam-wrist-host", default=None,
+                         help="camera_server.py's host/IP -- required for --cam-wrist-backend remote")
+    parser.add_argument("--cam-wrist-port", type=int, default=6000,
+                         help="camera_server.py's port -- only used for --cam-wrist-backend remote")
     parser.add_argument("--task", default="task description in here",
                          help="Task string the policy was conditioned on (default: the placeholder "
                               "open_trashcan_50 was actually recorded with)")
@@ -97,6 +114,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main():
     args = build_arg_parser().parse_args()
 
+    if args.cam_wrist_backend == "remote":
+        if not args.cam_wrist_host:
+            sys.exit("--cam-wrist-host is required for --cam-wrist-backend remote")
+    elif args.cam_wrist_index is None:
+        sys.exit(f"--cam-wrist-index is required for --cam-wrist-backend {args.cam_wrist_backend}")
+
     print(f"Loading policy from {args.checkpoint}")
     policy = GrootPolicy.from_pretrained(Path(args.checkpoint), device=args.device)
     device_override = {"device_processor": {"device": policy.config.device}}
@@ -106,8 +129,22 @@ def main():
     )
 
     cam_mgr = CameraManager({
-        "cam_wrist": CameraConfig(index=args.cam_wrist_index, backend=args.cam_wrist_backend)
+        "cam_wrist": CameraConfig(
+            index=args.cam_wrist_index, backend=args.cam_wrist_backend,
+            host=args.cam_wrist_host, port=args.cam_wrist_port,
+        )
     })
+    if args.cam_wrist_backend == "remote":
+        print(f"Waiting for the first frame from camera_server.py at "
+              f"{args.cam_wrist_host}:{args.cam_wrist_port}...")
+        wait_start = time.time()
+        while cam_mgr.cameras["cam_wrist"].read() is None:
+            if time.time() - wait_start > 15.0:
+                sys.exit(f"[ERROR] No frame received from {args.cam_wrist_host}:{args.cam_wrist_port} "
+                          f"after 15s -- is camera_server.py running there and reachable? Refusing to "
+                          f"start moving the arm on a blank image.")
+            time.sleep(0.2)
+        print("[OK] First frame received.")
 
     print(f"Connecting to UR arm at {args.robot_ip}...")
     robot = UR7eRobot(args.robot_ip, controller=args.controller)

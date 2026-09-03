@@ -1,15 +1,22 @@
 """Camera management for observation recording.
 
-Each camera is a `Camera` (a single BGR frame source). Two backends are
+Each camera is a `Camera` (a single BGR frame source). Three backends are
 provided, selected via `CameraConfig.backend`:
   - "usb":       a V4L2/UVC camera via cv2.VideoCapture
   - "realsense": an Intel RealSense camera's color stream via pyrealsense2
+  - "remote":    a camera_server.py process's stream over TCP, for when the
+                 camera is physically attached to a different machine (e.g.
+                 the robot's control PC) than the one reading frames (e.g. a
+                 separate GPU machine running policy inference)
 
 `CameraManager` treats every backend identically, so a session can mix
-USB and RealSense cameras freely. Adding a new backend means adding a
-`Camera` subclass and registering it in `_BACKENDS` below.
+USB, RealSense, and remote cameras freely. Adding a new backend means adding
+a `Camera` subclass and registering it in `_BACKENDS` below.
 """
 
+import socket
+import struct
+import threading
 from abc import ABC, abstractmethod
 
 import cv2
@@ -107,9 +114,102 @@ class RealSenseCamera(Camera):
             self.pipeline.stop()
 
 
+class RemoteCamera(Camera):
+    """A camera fed by a `camera_server.py` process over TCP.
+
+    Wire format (see camera_server.py): a continuous stream of frames, each
+    a 4-byte big-endian length prefix followed by that many bytes of
+    JPEG-encoded image data.
+
+    A background thread owns the socket: it connects (reconnecting with a
+    fixed delay on drop), decodes frames as they arrive, and keeps only the
+    most recently decoded one. `read()` never blocks on the network -- it
+    just returns whatever's cached, so a slow/lagging link degrades to a
+    stale-but-recent frame rather than backlogging the control loop.
+    """
+
+    RECONNECT_DELAY_S = 1.0
+    SOCKET_TIMEOUT_S = 5.0
+
+    def __init__(self, name: str, cfg: CameraConfig):
+        if not cfg.host or not cfg.port:
+            raise ValueError(f"RemoteCamera '{name}' needs CameraConfig.host and .port set.")
+        self.name = name
+        self.host = cfg.host
+        self.port = cfg.port
+        self._frame: np.ndarray | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._sock: socket.socket | None = None
+        self._warned_disconnected = False
+        print(f"[OK]   RemoteCamera '{name}' connecting to {self.host}:{self.port} in the background...")
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                sock = socket.create_connection((self.host, self.port), timeout=self.SOCKET_TIMEOUT_S)
+                sock.settimeout(self.SOCKET_TIMEOUT_S)
+                self._sock = sock
+                if self._warned_disconnected:
+                    print(f"[OK]   RemoteCamera '{self.name}': reconnected to {self.host}:{self.port}.")
+                    self._warned_disconnected = False
+                self._read_frames(sock)
+            except OSError as e:
+                if self._stop.is_set():
+                    break  # release() shutting the socket down -- not a real disconnect
+                if not self._warned_disconnected:
+                    print(f"[WARN] RemoteCamera '{self.name}': can't reach {self.host}:{self.port} ({e}); "
+                          f"retrying every {self.RECONNECT_DELAY_S}s -- substituting blank frames until it recovers.")
+                    self._warned_disconnected = True
+            finally:
+                if self._sock is not None:
+                    try:
+                        self._sock.close()
+                    except OSError:
+                        pass
+                    self._sock = None
+            if not self._stop.is_set():
+                self._stop.wait(self.RECONNECT_DELAY_S)
+
+    def _read_frames(self, sock: socket.socket):
+        while not self._stop.is_set():
+            (length,) = struct.unpack(">I", self._recv_exact(sock, 4))
+            payload = self._recv_exact(sock, length)
+            frame = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                with self._lock:
+                    self._frame = frame
+
+    @staticmethod
+    def _recv_exact(sock: socket.socket, n: int) -> bytes:
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                raise ConnectionError("camera_server.py closed the connection")
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def read(self) -> np.ndarray | None:
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def release(self):
+        self._stop.set()
+        if self._sock is not None:
+            try:
+                self._sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        self._thread.join(timeout=2.0)
+
+
 _BACKENDS = {
     "usb": USBCamera,
     "realsense": RealSenseCamera,
+    "remote": RemoteCamera,
 }
 
 

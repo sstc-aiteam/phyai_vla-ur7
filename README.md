@@ -478,6 +478,39 @@ python infer_groot_open_trashcan.py \
     --num-steps 100
 ```
 
+#### Camera on a different machine (remote RealSense)
+
+`groot_infer` typically lives on a GPU machine, which isn't always the same
+machine the wrist camera is physically plugged into (e.g. a D405 attached
+to the robot's control PC instead). For that case, `--cam-wrist-backend
+remote` reads frames over the network from `camera_server.py` instead of a
+locally attached device:
+
+On the machine with the camera attached (any env with `opencv-python` +
+`pyrealsense2`, e.g. this repo's own `requirements.txt` env):
+
+```bash
+python camera_server.py --backend realsense --index 0 --port 6000
+```
+
+On the GPU machine, point inference at it instead of a local `--cam-wrist-index`:
+
+```bash
+conda activate groot_infer
+python infer_groot_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/groot_open_trashcan_50/checkpoints/last/pretrained_model \
+    --cam-wrist-backend remote --cam-wrist-host <camera-machine-ip> --cam-wrist-port 6000 \
+    --num-steps 100
+```
+
+The script waits (up to 15s) for a first frame before touching the robot,
+and reconnects automatically (with a console `[WARN]`) if the connection
+drops mid-run -- but a frame lost mid-run still degrades to a blank image
+fed to the policy rather than pausing the arm, so watch the console during
+a run same as you'd watch the arm itself. See the script's own safety
+banner and `camera_server.py`'s docstring for details.
+
 ## Project layout
 
 ```
@@ -489,6 +522,7 @@ lerobot.concat_datasets.py  Dataset concatenation entry point script
 eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (open_trashcan-specific)
 infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
 infer_groot_open_trashcan.py  Closed-loop GR00T N1.7 policy inference on the real robot (open_trashcan_50-specific)
+camera_server.py            Streams a local camera over TCP for the "remote" CameraConfig backend
 requirements.txt        Python dependencies
 scripts/
     setup_groot_env.sh   One-time GR00T N1.7 finetuning env setup (sibling uv/Python-3.12 lerobot checkout)
@@ -500,7 +534,7 @@ ur7e_recorder/          Recorder implementation
     keyboard.py         Non-blocking key input
     gripper/            Gripper interface, RobotiqGripper, NoGripper (--gripper none)
     robot.py            UR RTDE connection lifecycle (e-Series freedriveMode or CB3 teachMode)
-    camera.py           Camera interface (USBCamera, RealSenseCamera) + CameraManager
+    camera.py           Camera interface (USBCamera, RealSenseCamera, RemoteCamera) + CameraManager
     dataset.py          LeRobotDatasetWriter (wraps lerobot's LeRobotDataset, v3 format on disk)
     session.py          RecordingSession (the recording loop)
     replay.py            EpisodeReplayer (streams a saved episode's actions back to the robot)

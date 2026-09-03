@@ -11,7 +11,9 @@ from dataclasses import dataclass
 
 
 #: Camera backends a CameraConfig can select.
-CAMERA_BACKENDS = ("usb", "realsense")
+#: "remote" reads from a camera_server.py process over TCP instead of a
+#: locally attached device -- see ur7e_recorder.camera.RemoteCamera.
+CAMERA_BACKENDS = ("usb", "realsense", "remote")
 
 #: Freedrive implementations a robot's controller generation supports:
 #:   "e-series" -- freedriveMode()/endFreedriveMode() (UR7e and other e-Series arms)
@@ -34,6 +36,8 @@ class CameraConfig:
     height: int = 480
     fps: int = 5
     backend: str = CAMERA_BACKENDS[0]  # "usb" (cv2.VideoCapture) or "realsense" (pyrealsense2)
+    host: str | None = None  # "remote" backend only: camera_server.py's host
+    port: int | None = None  # "remote" backend only: camera_server.py's port
 
 
 @dataclass
