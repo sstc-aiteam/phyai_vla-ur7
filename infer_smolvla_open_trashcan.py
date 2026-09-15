@@ -1,11 +1,18 @@
 #!/usr/bin/env python
-"""Closed-loop ACT inference on the real UR7e arm.
+"""Closed-loop SmolVLA inference on the real UR7e arm.
 
-Mirrors `eval_act_open_trashcan.py`'s policy-loading/pre-post-processing
-and `ur7e_recorder.replay.EpisodeReplayer`'s physical motion pattern
-(blocking moveJ to the first pose, then a servoJ stream at the recording
-fps) -- except every action comes live from the policy instead of a
-recorded episode.
+Mirrors `infer_act_open_trashcan.py` exactly (same physical motion pattern:
+blocking moveJ to the first pose, then a servoJ stream at the recording fps)
+-- the only difference is loading a `SmolVLAPolicy` checkpoint instead of
+`ACTPolicy`. See that script's docstring for the full motion-pattern
+rationale.
+
+The checkpoint's own saved preprocessor (`policy_preprocessor.json`) already
+embeds the `--rename_map` used at training time
+(`observation.images.cam_wrist` -> `observation.images.camera1`), so this
+script feeds observations under the original `cam_wrist` key -- same as
+`eval_smolvla_open_trashcan.py` -- and the loaded preprocessor renames them
+internally before they reach the model.
 
 SAFETY -- read before running:
   * The arm WILL move on its own. Stand clear, keep a hand near the
@@ -17,12 +24,16 @@ SAFETY -- read before running:
     does not prevent collisions with anything in the arm's reach.
   * The `open_trashcan` dataset was recorded with `--gripper none`
     (meta/stats.json: the `gripper` channel is a constant 0.0 across all
-    50 episodes), so the policy never saw a gripper open/close example.
+    episodes), so the policy never saw a gripper open/close example.
     Its 7th action dimension carries no learned signal -- don't expect
     (or wire up) meaningful gripper control from this checkpoint.
   * Test at a low --fps/short --num-steps first, and watch the very
     first moveJ (it moves at --start-speed, blocking, from wherever the
     arm currently is to the policy's first predicted pose).
+  * SmolVLA predicts chunk_size=50-step action chunks and queues them
+    internally (same `select_action` action-queue behavior as ACT) --
+    expect a brief pause every ~50 steps (~10s at 5 Hz) while it predicts
+    the next chunk from a VLM forward pass, heavier per-call than ACT's.
 """
 
 import argparse
@@ -33,8 +44,8 @@ from pathlib import Path
 import cv2
 import torch
 
-from lerobot.policies.act.modeling_act import ACTPolicy
 from lerobot.policies.factory import make_pre_post_processors
+from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
 from ur7e_recorder.camera import CameraManager
 from ur7e_recorder.config import CameraConfig, GRIPPER_KINDS
@@ -53,7 +64,7 @@ SERVO_GAIN = 300
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--checkpoint", default="outputs/act_open_trashcan/checkpoints/last/pretrained_model")
+    parser.add_argument("--checkpoint", default="outputs/smolvla_open_trashcan_100/checkpoints/last/pretrained_model")
     parser.add_argument("--robot-ip", default="192.168.50.76")
     parser.add_argument("--controller", default="e-series", choices=("e-series", "cb3"),
                          help="Inference only moves the arm, never freedrive, so this rarely matters")
@@ -93,10 +104,11 @@ def main():
         sys.exit(f"--cam-wrist-index is required for --cam-wrist-backend {args.cam_wrist_backend}")
 
     print(f"Loading policy from {args.checkpoint}")
-    policy = ACTPolicy.from_pretrained(Path(args.checkpoint), device=args.device)
+    ckpt = Path(args.checkpoint)
+    policy = SmolVLAPolicy.from_pretrained(ckpt, device=args.device)
     device_override = {"device_processor": {"device": policy.config.device}}
     preprocessor, postprocessor = make_pre_post_processors(
-        policy.config, pretrained_path=Path(args.checkpoint), dataset_stats=None,
+        policy.config, pretrained_path=ckpt, dataset_stats=None,
         preprocessor_overrides=device_override, postprocessor_overrides=device_override,
     )
 
