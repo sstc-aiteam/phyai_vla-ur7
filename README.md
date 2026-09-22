@@ -532,6 +532,197 @@ fed to the policy rather than pausing the arm, so watch the console during
 a run same as you'd watch the arm itself. See the script's own safety
 banner and `camera_server.py`'s docstring for details.
 
+## Finetuning pi0
+
+Finetunes [`lerobot/pi0_base`](https://huggingface.co/lerobot/pi0_base)
+against a local LeRobot v3 dataset via `lerobot`'s native
+`--policy.type=pi0` support. Like GR00T, this lives in a **separate Python
+3.12 environment**, cloned as a sibling directory next to this repo -- pi0's
+PyTorch port needs `transformers>=5.4,<5.6` (a SigLIP fix), which conflicts
+with this repo's own `requirements.txt` pin (`transformers<5.0`, for the
+ACT/SmolVLA extras). No changes are made to this repo's own environment.
+
+**Before you start:** pi0_base's tokenizer/config come from its underlying
+VLM backbone, `google/paligemma-3b-pt-224`, which is a *gated* Hugging Face
+model (manual review by Google, not instant). Request access at
+<https://huggingface.co/google/paligemma-3b-pt-224>, then log in with a
+token that has access (do this inside the pi0 venv after setup):
+
+```bash
+uv run --project ../lerobot-pi0 hf auth login
+```
+
+### One-time setup
+
+```bash
+scripts/setup_pi0_env.sh
+```
+
+Clones `huggingface/lerobot` to `../lerobot-pi0` (or updates it if it
+already exists), creates a `uv`-managed Python 3.12 venv there, and
+installs `lerobot[pi,training]` into it.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dir` | `../lerobot-pi0` | Where to clone the pi0-enabled `lerobot` checkout |
+| `--ref` | `main` | Git ref to check out |
+
+### Training
+
+```bash
+scripts/train_pi0.sh --dataset-dir open_trashcan_50
+```
+
+open_trashcan has one camera (`cam_wrist`); pi0_base's pretrained config
+expects three generic slots (`base_0_rgb`/`left_wrist_0_rgb`/
+`right_wrist_0_rgb`) -- the script's `--rename_map` maps `cam_wrist` onto
+`left_wrist_0_rgb` (closest semantic match, same "dataset visuals as a
+subset of the policy's declared visuals" mechanism used for SmolVLA); the
+other two slots stay unfilled.
+
+Run a cheap smoke test first to confirm the pipeline (auth, dataset
+loading, GPU) works end-to-end before committing to a full run:
+
+```bash
+scripts/train_pi0.sh --dataset-dir open_trashcan_10 \
+    --steps 30 --batch-size 8 --save-freq 30
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--dataset-dir` | `open_trashcan_50` | Local LeRobot v3 dataset directory |
+| `--pi0-dir` | `../lerobot-pi0` | pi0-enabled `lerobot` checkout from setup |
+| `--output-dir` | `outputs/pi0_<dataset-dir>` | Checkpoints/logs |
+| `--job-name` | `<dataset-dir>` | Run name |
+| `--base-model` | `lerobot/pi0_base` | Base checkpoint to finetune |
+| `--batch-size` | `8` | |
+| `--steps` | `50000` | |
+| `--save-freq` | `5000` | Checkpoint save interval, in steps |
+| `--gpu` | `1` | `CUDA_VISIBLE_DEVICES` for the training process -- check `nvidia-smi` and adjust if GPU 1 is busy or absent |
+| `--wandb` | off | Enable Weights & Biases logging |
+| `--seed` | `42` | |
+| `--extra-args "..."` | none | Verbatim passthrough to `lerobot-train` for one-off overrides |
+
+Checkpoints and logs land under `--output-dir`.
+
+### Offline evaluation
+
+`eval_pi0_open_trashcan.py` mirrors `eval_smolvla_open_trashcan.py` -- an
+open-loop replay against recorded ground-truth actions from held-out
+episodes, reporting per-joint MAE. Must run inside the `../lerobot-pi0` venv
+(this repo's own env can't import `lerobot.policies.pi0`):
+
+```bash
+uv run --project ../lerobot-pi0 python eval_pi0_open_trashcan.py \
+    --checkpoint outputs/pi0_open_trashcan_100/checkpoints/last/pretrained_model \
+    --dataset-name open_trashcan \
+    --num-episodes 6 \
+    --output outputs/pi0_open_trashcan_eval.json
+```
+
+### Running inference on the real robot
+
+`infer_pi0_open_trashcan.py` runs a finetuned pi0 checkpoint closed-loop on
+the physical arm -- the pi0 counterpart of
+[infer_act_open_trashcan.py](#running-inference-on-the-real-robot). Unlike
+GR00T, this checkpoint is trained with `use_relative_actions=false` (the
+`train_pi0.sh` default), so `PI0Policy.select_action()`'s plain per-step
+action-queue call works directly -- no chunk-decoding workaround needed.
+
+Same as GR00T inference, this needs both pi0 (matching `../lerobot-pi0`'s
+schema) *and* real-time UR robot control (`ur-rtde`, `pyrealsense2`) in the
+same process, so it needs its own env, **`pi0_infer`** -- a dedicated
+Python 3.12 conda env, kept separate from both `../lerobot-pi0` (missing the
+robot packages) and this repo's own env (missing the `pi`/`training`
+extras):
+
+```bash
+conda create -n pi0_infer python=3.12 -y
+conda run -n pi0_infer pip install -e "../lerobot-pi0[pi,training]"
+conda run -n pi0_infer pip install ur-rtde pyrealsense2 opencv-python
+```
+
+Then run:
+
+```bash
+conda activate pi0_infer
+python infer_pi0_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/pi0_open_trashcan_100/checkpoints/last/pretrained_model \
+    --cam-wrist-index 0 --cam-wrist-backend realsense \
+    --num-steps 100
+```
+
+Same [remote-camera setup](#camera-on-a-different-machine-remote-realsense)
+as GR00T applies here too -- if `pi0_infer` lives on a GPU machine that
+isn't the one the wrist camera is physically attached to, run
+`camera_server.py` on the camera machine and point inference at it instead
+of a local `--cam-wrist-index`:
+
+```bash
+conda activate pi0_infer
+python infer_pi0_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/pi0_open_trashcan_100/checkpoints/last/pretrained_model \
+    --cam-wrist-backend remote --cam-wrist-host <camera-machine-ip> --cam-wrist-port 6000 \
+    --num-steps 100
+```
+
+**Safety:** same as GR00T/ACT/SmolVLA inference -- the arm moves on its own
+from a live model prediction, with no collision checking. Clear the
+workspace, keep a hand near the pendant's e-stop, and press `Q` (checked
+once per control step) at the first sign of trouble. pi0 predicts
+`chunk_size=50`-step action chunks (like SmolVLA), so expect a brief pause
+every ~50 steps while it replans. See the script's own safety banner for
+the full list.
+
+## Finetuning pi05
+
+pi05 is [`lerobot/pi05_base`](https://huggingface.co/lerobot/pi05_base),
+the successor checkpoint to pi0_base, trained/evaluated/inferred with the
+exact same tooling as [pi0](#finetuning-pi0) -- same `../lerobot-pi0`
+environment (it already has pi05 available, no separate setup step), same
+`scripts/train_pi0.sh` wrapper (just pass `--base-model lerobot/pi05_base`),
+and the same gated-PaliGemma-backbone prerequisite. The only differences
+are the policy class (`PI05Policy` vs `PI0Policy`) and script names
+(`eval_pi05_open_trashcan.py` / `infer_pi05_open_trashcan.py`).
+
+**Train:**
+
+```bash
+scripts/train_pi0.sh --dataset-dir open_trashcan_50 \
+    --base-model lerobot/pi05_base \
+    --output-dir outputs/pi05_open_trashcan_50 --job-name pi05_open_trashcan_50
+```
+
+**Offline evaluation** (same open-loop MAE methodology as pi0):
+
+```bash
+uv run --project ../lerobot-pi0 python eval_pi05_open_trashcan.py \
+    --checkpoint outputs/pi05_open_trashcan_100/checkpoints/last/pretrained_model \
+    --dataset-name open_trashcan \
+    --num-episodes 6 \
+    --output outputs/pi05_open_trashcan_eval.json
+```
+
+**Inference on the real robot:** reuses the same `pi0_infer` conda env set
+up for pi0 (see [Running inference on the real robot](#running-inference-on-the-real-robot)
+above) -- no separate env needed:
+
+```bash
+conda activate pi0_infer
+python infer_pi05_open_trashcan.py \
+    --robot-ip 192.168.50.75 \
+    --checkpoint outputs/pi05_open_trashcan_100/checkpoints/last/pretrained_model \
+    --cam-wrist-index 0 --cam-wrist-backend realsense \
+    --num-steps 100
+```
+
+(swap `--cam-wrist-backend remote --cam-wrist-host <camera-machine-ip>` for
+a [remote camera](#camera-on-a-different-machine-remote-realsense), same as
+pi0.) Same safety notes as pi0 inference apply -- see the script's own
+safety banner.
+
 ## Project layout
 
 ```
@@ -543,6 +734,12 @@ lerobot.concat_datasets.py  Dataset concatenation entry point script
 eval_act_open_trashcan.py   Open-loop ACT policy evaluation against a dataset (open_trashcan-specific)
 infer_act_open_trashcan.py  Closed-loop ACT policy inference on the real robot (open_trashcan-specific)
 infer_groot_open_trashcan.py  Closed-loop GR00T N1.7 policy inference on the real robot (open_trashcan_50-specific)
+eval_smolvla_open_trashcan.py  Open-loop SmolVLA policy evaluation against a dataset (open_trashcan-specific)
+infer_smolvla_open_trashcan.py  Closed-loop SmolVLA policy inference on the real robot (open_trashcan-specific)
+eval_pi0_open_trashcan.py   Open-loop pi0 policy evaluation against a dataset (open_trashcan-specific; run inside ../lerobot-pi0)
+infer_pi0_open_trashcan.py  Closed-loop pi0 policy inference on the real robot (open_trashcan-specific; run inside the pi0_infer conda env)
+eval_pi05_open_trashcan.py  Open-loop pi05 policy evaluation against a dataset (open_trashcan-specific; run inside ../lerobot-pi0)
+infer_pi05_open_trashcan.py  Closed-loop pi05 policy inference on the real robot (open_trashcan-specific; run inside the pi0_infer conda env)
 camera_server.py            Streams a local camera over TCP for the "remote" CameraConfig backend
 check_remote_camera.py      Diagnostic: verifies a camera_server.py stream (rate + snapshot) before trusting it for inference
 requirements.txt        Python dependencies
@@ -551,6 +748,8 @@ scripts/
     train_groot.sh       GR00T N1.7 finetuning launch wrapper around lerobot-train
     eval_groot.sh        GR00T N1.7 offline eval launch wrapper (forward-pass loss, no robot/simulator)
     eval_groot.py        Offline eval implementation (loads a checkpoint + dataset, reports loss)
+    setup_pi0_env.sh     One-time pi0 finetuning env setup (sibling uv/Python-3.12 lerobot checkout)
+    train_pi0.sh         pi0 finetuning launch wrapper around lerobot-train
 ur7e_recorder/          Recorder implementation
     config.py           RecorderConfig / ReplayConfig / CameraConfig (single source of truth for settings)
     keyboard.py         Non-blocking key input
