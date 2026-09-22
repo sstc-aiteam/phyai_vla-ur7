@@ -37,6 +37,7 @@ open_trashcan*/
 grasp_alcohol_spray_bottle*/
 *.mp4
 *.avi
+*.gz
 
 # Checkpoints / model weights
 *.pt
@@ -44,3 +45,4 @@ grasp_alcohol_spray_bottle*/
 *.ckpt
 checkpoints/
 .claude/settings.json
+outputs/
