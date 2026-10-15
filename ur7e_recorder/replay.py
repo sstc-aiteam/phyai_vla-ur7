@@ -28,6 +28,12 @@ SERVO_ACCELERATION = 0.0
 SERVO_LOOKAHEAD_TIME = 0.1
 SERVO_GAIN = 300
 
+NETWORK_HINT = (
+    " The RTDE connection dropped or its control script stopped -- this "
+    "usually means an unstable network link. Use a wired connection and "
+    "check the pendant for a protective stop."
+)
+
 
 class EpisodeReplayer:
     """Replays one recorded episode's actions on the physical robot."""
@@ -44,7 +50,10 @@ class EpisodeReplayer:
 
         first_q, first_gripper_closed = actions[0][:6], actions[0][6] > GRIPPER_CLOSED_THRESHOLD
         print(f"[REPLAY] Episode {episode_index}: moving to start pose...")
-        self.robot.rtde_c.moveJ(first_q, start_speed, start_acceleration)
+        if not self.robot.rtde_c.moveJ(first_q, start_speed, start_acceleration):
+            raise RuntimeError(
+                "moveJ to the start pose failed" + NETWORK_HINT
+            )
         self._apply_gripper(first_gripper_closed)
 
         print(f"[REPLAY] Streaming {len(actions)} steps @ {self.fps} Hz")
@@ -53,10 +62,8 @@ class EpisodeReplayer:
 
             q = action[:6]
             self._apply_gripper(action[6] > GRIPPER_CLOSED_THRESHOLD)
-            self.robot.rtde_c.servoJ(
-                q, SERVO_VELOCITY, SERVO_ACCELERATION, dt,
-                SERVO_LOOKAHEAD_TIME, SERVO_GAIN,
-            )
+            if not self._servo(q, dt):
+                self._abort(i, len(actions))
 
             elapsed = time.time() - loop_start
             sleep_time = dt - elapsed
@@ -68,6 +75,32 @@ class EpisodeReplayer:
 
         self.robot.rtde_c.servoStop()
         print("[REPLAY] Done.")
+
+    def _servo(self, q: list, dt: float) -> bool:
+        """Send one servoJ target; False if it didn't go through."""
+        rtde_c = self.robot.rtde_c
+        try:
+            if not rtde_c.isConnected():
+                return False
+            return bool(rtde_c.servoJ(
+                q, SERVO_VELOCITY, SERVO_ACCELERATION, dt,
+                SERVO_LOOKAHEAD_TIME, SERVO_GAIN,
+            ))
+        except RuntimeError:
+            return False
+
+    def _abort(self, step: int, total: int):
+        """Stop the arm (best effort) and fail loudly. Without this a dead
+        RTDE link keeps "streaming" and reporting progress for commands the
+        robot never received."""
+        try:
+            self.robot.rtde_c.servoStop()
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"Lost control of the robot at step {step + 1}/{total}; "
+            "replay aborted." + NETWORK_HINT
+        )
 
     def _apply_gripper(self, should_close: bool):
         if should_close and self.gripper.is_open:
