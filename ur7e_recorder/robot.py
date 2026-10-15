@@ -188,6 +188,12 @@ class UR7eRobot:
         self.rtde_r.disconnect()
         self.rtde_r = rtde_receive.RTDEReceiveInterface(self.ip)
 
+    def ensure_receive_live(self):
+        """Rebuild the receive interface if the controller dropped it."""
+        if not self.rtde_r.isConnected():
+            print("  [WARN] RTDE receive connection was dropped -- reconnecting...")
+            self.resync_receive()
+
     def _freedrive_preflight_issue(self) -> str | None:
         """Return a specific reason freedrive would be rejected, or None if clear."""
         if self.rtde_r.isEmergencyStopped():

@@ -87,19 +87,43 @@ class RecordingSession:
         except KeyboardInterrupt:
             print("\n[INTERRUPTED]")
         finally:
-            self.robot.disable_freedrive()
-            self.robot.disconnect()
-            if self.cam_mgr:
-                self.cam_mgr.release()
-            self.keys.stop()
-            # Quitting or an interrupt mid-episode shouldn't leave a
-            # half-written episode buffer (and its temp frame images)
-            # behind uncommitted.
-            if self.recording:
-                self.writer.discard_episode()
-
-        self.writer.finalize()
+            self._shutdown()
         return self.episodes_recorded
+
+    def _shutdown(self):
+        """Ordered, fault-isolated teardown.
+
+        Dataset-critical steps come first and the robot comes last: robot
+        teardown can block on a dead RTDE connection (the user then hits
+        Ctrl-C again), and that must not skip `writer.finalize()` -- an
+        unfinalized dataset has an unclosed Parquet footer and can't be
+        loaded, and pyarrow aborts the interpreter on exit.
+        """
+        steps = [
+            ("discard partial episode", self._discard_partial_episode),
+            ("stop keyboard listener", self.keys.stop),
+            ("release cameras", self.cam_mgr.release if self.cam_mgr else None),
+            ("finalize dataset", self.writer.finalize),
+            ("end freedrive", self.robot.disable_freedrive),
+            ("disconnect robot", self.robot.disconnect),
+        ]
+        for name, step in steps:
+            if step is None:
+                continue
+            try:
+                step()
+            except KeyboardInterrupt:
+                print(f"[WARN] Interrupted while trying to {name}; continuing shutdown.")
+            except Exception as exc:
+                print(f"[WARN] Failed to {name}: {exc!r}; continuing shutdown.")
+
+    def _discard_partial_episode(self):
+        # Quitting or an interrupt mid-episode shouldn't leave a
+        # half-written episode buffer (and its temp frame images)
+        # behind uncommitted.
+        if self.recording:
+            self.recording = False
+            self.writer.discard_episode()
 
     def _loop(self):
         dt = 1.0 / self.fps
@@ -150,6 +174,11 @@ class RecordingSession:
             self.recording = True
             self._episode_min = None
             self._episode_max = None
+            # A feed that was stuck (and already resynced once) before this
+            # episode must get a fresh resync attempt, not stay silently stuck.
+            self._stuck_frames = 0
+            self._stuck_resynced = False
+            self._last_joint_positions = None
             print(f"  [REC] Recording episode {self.episodes_recorded}...")
         else:
             self.recording = False
@@ -174,6 +203,9 @@ class RecordingSession:
         return max_range < FROZEN_EPISODE_RANGE_RAD
 
     def _record_step(self):
+        # The controller can drop the RTDE receive session outright ("End of
+        # file"); getActualQ() then just returns the last packet forever.
+        self.robot.ensure_receive_live()
         joint_positions = self.robot.get_joint_positions()
         self._check_stuck_readings(joint_positions)
         self._track_episode_range(joint_positions)
