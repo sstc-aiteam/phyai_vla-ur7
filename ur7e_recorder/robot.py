@@ -77,6 +77,7 @@ class UR7eRobot:
         # process (no exception, just frozen readings).
         self.rtde_c = rtde_control.RTDEControlInterface(ip)
         self.rtde_r = rtde_receive.RTDEReceiveInterface(ip)
+        self._freedrive_active = False
 
     def get_joint_positions(self) -> list:
         """Current joint positions in radians (6 values)."""
@@ -135,12 +136,21 @@ class UR7eRobot:
             )
             logger.error(msg)
             raise RuntimeError(msg)
+        self._freedrive_active = True
 
     def disable_freedrive(self):
+        # Calling endTeachMode()/endFreedriveMode() when freedrive was
+        # never actually entered (e.g. enable_freedrive() raised) hits
+        # ur_rtde's C++ binding in a state it doesn't handle gracefully
+        # and crashes the whole process (segfault) instead of raising --
+        # so only call it if we know we're actually in freedrive.
+        if not self._freedrive_active:
+            return
         if self.controller == "cb3":
             self.rtde_c.endTeachMode()
         else:
             self.rtde_c.endFreedriveMode()
+        self._freedrive_active = False
 
     def disconnect(self):
         self.rtde_c.stopScript()
