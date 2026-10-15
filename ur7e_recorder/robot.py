@@ -188,6 +188,15 @@ class UR7eRobot:
         self.rtde_r.disconnect()
         self.rtde_r = rtde_receive.RTDEReceiveInterface(self.ip)
 
+    def is_control_alive(self) -> bool:
+        """True if the RTDE control connection is up and its control script
+        is still running on the controller. False means commands (and the
+        freedrive mode itself) are no longer in effect."""
+        try:
+            return bool(self.rtde_c.isConnected() and self.rtde_c.isProgramRunning())
+        except RuntimeError:
+            return False
+
     def ensure_receive_live(self):
         """Rebuild the receive interface if the controller dropped it."""
         if not self.rtde_r.isConnected():

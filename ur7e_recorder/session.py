@@ -26,6 +26,11 @@ CONTROLS_HELP = """\
 # hold position.
 FROZEN_EPISODE_RANGE_RAD = 0.01
 
+# Consecutive recording steps the RTDE control script may look dead before
+# the session aborts. One bad poll on a jittery link shouldn't end a session;
+# a script that stays down means freedrive is gone and the arm is rigid.
+CONTROL_LOST_STEPS = 3
+
 
 class RecordingSession:
     """Runs the free-drive recording loop until `num_episodes` is reached
@@ -75,6 +80,8 @@ class RecordingSession:
         # triggered, or fired too late) before it ever reaches the dataset.
         self._episode_min = None
         self._episode_max = None
+
+        self._control_lost_steps = 0
 
     def run(self):
         self.keys.start()
@@ -205,6 +212,7 @@ class RecordingSession:
     def _record_step(self):
         # The controller can drop the RTDE receive session outright ("End of
         # file"); getActualQ() then just returns the last packet forever.
+        self._check_control_alive()
         self.robot.ensure_receive_live()
         joint_positions = self.robot.get_joint_positions()
         self._check_stuck_readings(joint_positions)
@@ -218,6 +226,24 @@ class RecordingSession:
         if self.writer.num_steps % self.fps == 0:
             elapsed = self.writer.num_steps / self.fps
             print(f"    ... {self.writer.num_steps} steps ({elapsed:.1f}s)")
+
+    def _check_control_alive(self):
+        """Abort rather than keep saving frames once the RTDE control script
+        is gone: freedrive has silently ended (the arm is rigid) and the
+        feed is likely stale, so the rest of the episode would be dead data.
+        Raising runs the normal shutdown, which discards the partial episode
+        and finalizes the episodes already saved."""
+        if self.robot.is_control_alive():
+            self._control_lost_steps = 0
+            return
+        self._control_lost_steps += 1
+        if self._control_lost_steps >= CONTROL_LOST_STEPS:
+            raise RuntimeError(
+                "Lost control of the robot while recording (RTDE control "
+                "script stopped) -- the current episode was not saved. This "
+                "usually means an unstable network link; use a wired "
+                "connection and check the pendant for a protective stop."
+            )
 
     def _track_episode_range(self, joint_positions: list):
         if self._episode_min is None:
